@@ -1,0 +1,10 @@
+{
+  "name": "her-shadowing",
+  "private": true,
+  "description": "Commute shadowing PWA for the film Her (static site, no build step)",
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/logic.test.mjs",
+    "serve": "python -m http.server 5173"
+  }
+}

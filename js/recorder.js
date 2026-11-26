@@ -126,7 +126,7 @@ export function playBlob(blob) {
 }
 
 // ---------- speech recognition ----------
-const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+const SR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : undefined;
 export const canScore = () => !!SR;
 
 /** Listen once; returns { stop(), result: Promise<string[] alternatives> }. */
@@ -176,14 +176,27 @@ const CONTRACTIONS = {
   "haven't": 'have not', "wouldn't": 'would not', "couldn't": 'could not', "shouldn't": 'should not',
   gonna: 'going to', wanna: 'want to', gotta: 'got to', gimme: 'give me', kinda: 'kind of', "'cause": 'because', cause: 'because',
   ok: 'okay', 'o.k.': 'okay', mr: 'mister', 'mr.': 'mister',
+  "how's": 'how is', "where's": 'where is', "who's": 'who is', "she'll": 'she will', "he'll": 'he will',
+  "they'll": 'they will', "it'll": 'it will', "we'd": 'we would', "they'd": 'they would', "she'd": 'she would',
+  "they've": 'they have', "who've": 'who have', "would've": 'would have', "could've": 'could have',
+  "should've": 'should have', "y'all": 'you all', "ma'am": 'madam',
 };
+// Typed or recognised text often drops the apostrophe ("im", "dont", "hows").
+// Map those spellings too; both sides are normalised the same way, so a
+// possessive like "its" expanding to "it is" still compares equal.
+// Skip bare spellings that are ordinary words ("were", "well", "ill", ...).
+const REAL_WORDS = new Set(['were', 'well', 'ill', 'id', 'wed', 'shed', 'hell', 'shell', 'cause']);
+for (const [k, v] of Object.entries(CONTRACTIONS)) {
+  const bare = k.replace(/'/g, '');
+  if (bare !== k && !(bare in CONTRACTIONS) && !REAL_WORDS.has(bare)) CONTRACTIONS[bare] = v;
+}
 function normWords(s) {
   return s.toLowerCase()
     .replace(/[‘’]/g, "'")
     .replace(/(\d),(\d)/g, '$1$2')
     .replace(/[^a-z0-9' ]+/g, ' ')
     .split(/\s+/).filter(Boolean)
-    .flatMap((w) => (CONTRACTIONS[w] || w.replace(/^'+|'+$/g, '')).split(' '))
+    .flatMap((w) => (CONTRACTIONS[w] || w.replace(/'/g, '')).split(' '))
     .filter(Boolean);
 }
 

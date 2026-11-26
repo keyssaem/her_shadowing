@@ -363,6 +363,49 @@ mark { background: color-mix(in srgb, var(--accent2) 30%, transparent); color: i
 .text-in { flex: 1; min-width: 0; padding: 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg2); }
 .ghost.block { width: 100%; margin-bottom: 8px; }
 
+/* favourites star on lines */
+.line { padding-right: 80px; }
+.line .fav {
+  position: absolute; right: 42px; top: 6px; width: 36px; height: 36px; border-radius: 50%;
+  border: 0; background: transparent; font-size: 18px; color: var(--muted); opacity: .5;
+}
+.line .fav.on { color: var(--accent2); opacity: 1; }
+.line.active .fav { opacity: 1; }
+.fav-list { list-style: none; margin: 12px 0 0; padding: 0; }
+.fav-list li { display: flex; gap: 8px; padding: 12px 4px; border-bottom: 1px solid var(--line); }
+.fav-list .sp { font-size: 11px; font-weight: 800; letter-spacing: .06em; color: var(--other); }
+.fav-list .role-theodore .sp, .fav-list li.role-theodore .sp { color: var(--theodore); }
+.fav-list li.role-samantha .sp { color: var(--samantha); }
+
+/* dictation */
+.tabs { padding: 0 0 6px; }
+.hidden-line { letter-spacing: 2px; color: var(--muted); }
+.dict-in {
+  width: 100%; padding: 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--card);
+  font-size: 17px; line-height: 1.4; resize: vertical;
+}
+.row.between { justify-content: space-between; margin-top: 6px; }
+
+/* AI conversation */
+.sec { font-size: 14px; color: var(--accent2); margin: 16px 0 8px; }
+.pick-list { list-style: none; margin: 0 0 14px; padding: 0; }
+.pick-list li { padding: 6px 0; border-bottom: 1px solid var(--line); }
+.pick-list small { display: block; color: var(--muted); font-size: 12px; }
+.targets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.chat { display: flex; flex-direction: column; gap: 8px; padding-bottom: 8px; }
+.bubble { max-width: 86%; padding: 10px 12px; border-radius: 16px; font-size: 16px; line-height: 1.4; display: flex; gap: 6px; align-items: flex-start; }
+.bubble.ai { align-self: flex-start; background: var(--card); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+.bubble.ai .icon-btn { min-width: 32px; height: 32px; font-size: 15px; }
+.bubble.me { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+.fb { align-self: flex-end; max-width: 86%; display: flex; flex-direction: column; gap: 2px; font-size: 13px; padding: 6px 10px; border-radius: 12px; background: var(--bg2); }
+.fb b { color: var(--ok); }
+.fb b.bad { color: #ff7a6a; }
+.fb small { color: var(--muted); }
+.composer { position: sticky; bottom: 0; padding: 10px 0 calc(90px + var(--safe-b)); background: var(--bg); display: grid; gap: 8px; }
+.composer textarea { width: 100%; padding: 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); font-size: 16px; resize: none; }
+.composer .row { gap: 8px; }
+.composer .row .card { margin: 0; flex: 1; }
+
 /* departure screen */
 .go {
   min-height: 100dvh; display: flex; flex-direction: column; justify-content: center; gap: 10px;

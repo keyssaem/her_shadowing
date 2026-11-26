@@ -22,7 +22,7 @@ let S = { ...blank(), ...ls.get('stats', {}) };
 S.totals = { ...blank().totals, ...S.totals };
 const save = () => ls.set('stats', S);
 
-const emptyDay = () => ({ lines: 0, heard: 0, reviews: 0, recs: 0, ms: 0, scenes: 0, goal: false });
+const emptyDay = () => ({ lines: 0, heard: 0, reviews: 0, recs: 0, ms: 0, scenes: 0, goal: false, grad: 0 });
 const dayOf = (k = dayKey()) => (S.days[k] ||= emptyDay());
 const isActive = (d) => d && (d.lines + d.heard + d.reviews + d.recs > 0 || d.ms >= 60000);
 
@@ -190,6 +190,8 @@ export function track(type, data = {}) {
   switch (type) {
     case 'open': {
       if (S.lastDay && S.lastDay !== k && daysBetween(S.lastDay, k) >= 3 && t.lines + t.reviews > 0) out.push(pick('comeback', {}, { voice: false }));
+      const weekly = weeklyLetter();
+      if (weekly) out.push(weekly);
       break;
     }
     case 'line':
@@ -216,6 +218,7 @@ export function track(type, data = {}) {
       d.reviews++; t.reviews++;
       if (data.graduated) {
         t.graduated++;
+        d.grad = (d.grad || 0) + 1;
         out.push(pick('graduated', { word: data.word }));
       } else if (data.box >= 3 && Math.random() < 0.35) {
         out.push(pick('levelUp', { word: data.word, next: data.nextKo, nextEn: data.nextEn }, { voice: false }));
@@ -236,6 +239,10 @@ export function track(type, data = {}) {
     }
     case 'score': {
       const { score, prev } = data;
+      // Remember the day's biggest improvement for the weekly report.
+      if (prev != null && data.text && score - prev > 0 && (!d.bestGain || score - prev > d.bestGain.to - d.bestGain.from)) {
+        d.bestGain = { text: data.text, from: prev, to: score };
+      }
       if (score === 100) { t.perfect++; out.push(pick('perfect', {}, { voice: false })); }
       else if (prev != null && score - prev >= 10) out.push(pick('improved', { from: prev, score, delta: score - prev }, { voice: false }));
       else if (score >= 90 && (prev == null || prev < 90)) out.push(pick('score90', { score }, { voice: false }));
@@ -268,6 +275,52 @@ export function track(type, data = {}) {
   if (type === 'tick' && isActive(d)) S.lastDay = k;
   save();
   return out;
+}
+
+// ---------- weekly report letter ----------
+/** Totals for the 7 days ending on `end` (inclusive). Pure: used by tests too. */
+export function weekReport(days, end) {
+  let minutes = 0, lines = 0, reviews = 0, graduated = 0, recs = 0, activeDays = 0, best = null;
+  for (let i = 0; i < 7; i++) {
+    const dd = days[dayKey(new Date(end.getFullYear(), end.getMonth(), end.getDate() - i))];
+    if (!dd) continue;
+    minutes += dd.ms / 60000; lines += dd.lines; reviews += dd.reviews; graduated += dd.grad || 0; recs += dd.recs;
+    if (isActive(dd)) activeDays++;
+    if (dd.bestGain && (!best || dd.bestGain.to - dd.bestGain.from > best.to - best.from)) best = dd.bestGain;
+  }
+  return { minutes: Math.round(minutes), lines, reviews, graduated, recs, activeDays, best };
+}
+
+/** On Sunday (or the first open after a missed Sunday), write the week's letter once. */
+function weeklyLetter(now = new Date()) {
+  const sunday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay());
+  const wk = dayKey(sunday);
+  if (S.weekly === wk) return null;
+  const w = weekReport(S.days, sunday);
+  if (!w.activeDays) { S.weekly = wk; return null; }
+  S.weekly = wk;
+  const prevW = weekReport(S.days, new Date(sunday.getFullYear(), sunday.getMonth(), sunday.getDate() - 7));
+  const delta = w.minutes - prevW.minutes;
+  const isToday = now.getDay() === 0;
+  const mon = new Date(sunday.getFullYear(), sunday.getMonth(), sunday.getDate() - 6);
+  const range = `${mon.getMonth() + 1}/${mon.getDate()}–${sunday.getMonth() + 1}/${sunday.getDate()}`;
+  const en = [
+    'Dear me,',
+    '',
+    `Here is your week${isToday ? ' so far' : ''}, written down so it does not slip away.`,
+    `You studied on ${pl(w.activeDays, 'day')} for ${pl(w.minutes, 'minute')}${prevW.minutes ? ` (${delta >= 0 ? `${delta} more` : `${-delta} fewer`} than the week before)` : ''}, spoke ${pl(w.lines, 'line')} out loud and reviewed ${pl(w.reviews, 'word')}.`,
+    w.graduated ? `${pl(w.graduated, 'word')} graduated this week. They are yours now.` : 'No word graduated yet this week, and that is fine: they are all on their way.',
+    w.best ? `Your biggest jump was on "${w.best.text.length > 70 ? w.best.text.slice(0, 67) + '...' : w.best.text}", from ${w.best.from} to ${w.best.to}.` : '',
+    r(L_CLOSE),
+    '',
+    'Love,',
+    'Your commute',
+  ].filter((x, i, a) => x !== '' || a[i - 1] !== '').join('\n');
+  const ko = `${isToday ? '이번 주' : '지난주'}(${range}) ${w.activeDays}일 · ${w.minutes}분${prevW.minutes ? ` (지난주보다 ${delta >= 0 ? '+' : '−'}${Math.abs(delta)}분)` : ''} · 대사 ${w.lines}줄 · 복습 ${w.reviews}번 · 졸업 ${w.graduated}개${w.best ? ` · 최고 상승 ${w.best.from}→${w.best.to}점` : ''}`;
+  const letter = { id: 'W' + wk, date: Date.now(), title: `주간 리포트 · ${range}`, en, ko };
+  S.letters.unshift(letter);
+  S.unread = (S.unread || 0) + 1;
+  return { ko: '이번 주 리포트 편지가 도착했어요.', en: "This week's letter is here.", voice: false, kind: 'letter', letter };
 }
 
 /** Big lifetime milestones also earn a letter (checked after line events). */
