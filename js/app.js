@@ -3,6 +3,12 @@ import { ACTS, CATEGORIES, annotateScenes, linkExpressions } from './content.js'
 import { Player } from './player.js';
 import { loadVoices, englishVoices, koreanVoices, defaultVoices, speak, cancelSpeech, roleOf } from './tts.js';
 import { lookup, guessPos, myDict, keyOf, boxLabel } from './dict.js';
+import { track, lineLetter, streak, stats, todayStats, activeDays, calendar, markLettersRead } from './motivate.js';
+import {
+  canRecord, startRecording, saveRecording, listByKey, listAll, deleteRecording, playBlob, stopPlayback,
+  canScore, listen, scoreAgainst,
+} from './recorder.js';
+import { chunkLine } from './player.js';
 
 // ---------- storage ----------
 const LS = {
@@ -14,7 +20,7 @@ const LS = {
 const DEFAULT_SETTINGS = {
   mode: 'shadow', myRole: 'THEODORE', rate: 0.95, repeat: 2, gapFactor: 1.3,
   narration: false, roleReveal: true, drillKoreanFirst: true, loopScene: false, wakeLock: true,
-  keyOnly: false, voices: {},
+  keyOnly: false, voices: {}, voiceMotivation: true, dailyGoal: 15,
 };
 
 const state = {
@@ -54,16 +60,53 @@ const shuffle = (a) => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) {
 
 // ---------- player ----------
 const player = new Player({ getSettings: () => state.settings, onChange: () => updatePlayerUI() });
+
+// ---------- motivation delivery ----------
+// Messages show as toasts; during playback they are also spoken between cards
+// (Korean then English) so they reach you while driving. Letters open as a card.
+function deliver(msgs) {
+  for (const m of msgs.filter(Boolean)) {
+    toast(m.ko, m.kind === 'letter' ? '💌' : '✨');
+    if (player.playing && state.settings.voiceMotivation && m.voice) {
+      player.announce([
+        { type: 'beep', freq: 1046, label: '💬 응원 메시지' },
+        { type: 'speak', text: m.ko, voiceName: state.settings.voices.korean, lang: 'ko-KR', rate: 1, label: '💬 ' + m.ko },
+        { type: 'speak', text: m.en, voiceName: state.settings.voices.samantha, rate: state.settings.rate, label: '💬 ' + m.en },
+        { type: 'wait', ms: 500 },
+      ]);
+    }
+    if (m.kind === 'letter' && !player.playing) setTimeout(() => openLetter(m.letter), 900);
+  }
+  updateHomeStrip();
+}
+const reviewWord = (id, grade) => {
+  const before = myDict.all().find((i) => i.id === id);
+  if (!before) return;
+  const prevBox = before.box;
+  myDict.review(id, grade);
+  const it = myDict.all().find((i) => i.id === id);
+  if (grade === 'hard') return deliver(track('review', { word: it.text, box: 0 }));
+  const NEXT = ['', '1일', '2일', '4일', '1주', '2주', '1달'];
+  const NEXT_EN = ['', 'a day', 'two days', 'four days', 'a week', 'two weeks', 'a month'];
+  deliver(track('review', {
+    word: it.text, box: it.box, graduated: it.box === 6 && prevBox < 6, nextKo: NEXT[it.box], nextEn: NEXT_EN[it.box],
+  }));
+};
+
 // Word cards: listening to the end counts as a successful review;
 // pressing "previous" (replay) marks the card hard so it comes back.
 const hardMarked = new Set();
 player.onReplay = (card) => {
-  if (card?.kind === 'word') { hardMarked.add(card.id); myDict.review(card.id, 'hard'); }
+  if (card?.kind === 'word') { hardMarked.add(card.id); reviewWord(card.id, 'hard'); }
 };
 player.onCardDone = (card) => {
   if (card.kind === 'word') {
-    if (!hardMarked.delete(card.id)) myDict.review(card.id, 'good');
+    if (!hardMarked.delete(card.id)) reviewWord(card.id, 'good');
     return;
+  }
+  if (card.kind === 'line') {
+    deliver(track('line', { mode: state.settings.mode === 'listen' ? 'listen' : 'speak' }));
+    deliver([lineLetter()]);
   }
   if (player.kind === 'scene' && card.sceneId) {
     state.progress = { sceneId: card.sceneId, index: player.index };
@@ -72,12 +115,28 @@ player.onCardDone = (card) => {
 };
 player.onFinished = () => {
   if (player.kind === 'scene' && player.sceneId) {
+    const scene = sceneById(player.sceneId);
+    const firstTime = !state.done.has(player.sceneId);
     state.done.add(player.sceneId);
     LS.set('done', [...state.done]);
     state.progress = { sceneId: player.sceneId, index: 0 };
     LS.set('progress', state.progress);
+    if (firstTime && scene) {
+      const actScenes = state.script.scenes.filter((s) => s.act === scene.act && dialogueCount(s) > 0);
+      const actDone = actScenes.every((s) => state.done.has(s.id)) ? scene.act : null;
+      deliver(track('scene', {
+        title: sceneTitle(scene), lines: dialogueCount(scene),
+        actDone, actName: ACTS[scene.act - 1].ko, actEn: `Act ${scene.act}, ${ACTS[scene.act - 1].en}`,
+      }));
+    }
   }
+  deliver(track('session'));
 };
+
+// Count listening time while playing (daily goal + stats).
+setInterval(() => {
+  if (player.playing) deliver(track('tick', { ms: 5000, goalMin: state.settings.dailyGoal }));
+}, 5000);
 
 function sceneCards(scene) {
   const cards = [];
@@ -114,6 +173,7 @@ function render() {
   if (route === 'settings') return renderSettings();
   if (route === 'drill') return renderDrill();
   if (route === 'mydict') return renderMyDict();
+  if (route === 'stats') return renderStats();
   return renderHome();
 }
 
@@ -204,6 +264,7 @@ function renderHome() {
       <p class="eyebrow">오늘도 Theodore와 함께</p>
       <h2>${p ? '이어서 할까요?' : '첫 장면부터 시작해요'}</h2>
     </section>
+    <a class="strip" id="homeStrip" href="#/stats"></a>
     <button class="card primary" id="continue">
       <span class="card-kicker">${p ? '이어서' : '시작'} · ${ACTS[target.act - 1].ko} · p.${target.page}</span>
       <span class="card-title">${esc(sceneTitle(target))}</span>
@@ -218,7 +279,7 @@ function renderHome() {
       <button class="card" id="drill"><span class="card-kicker">표현 드라이브</span><span class="card-title">랜덤 15개</span><span class="card-sub">한국어 → 영어로 말하기</span></button>
       <a class="card" href="#/scenes"><span class="card-kicker">장면</span><span class="card-title">${keyDone}/${keyScenes.length}</span><span class="card-sub">핵심 장면 완료</span></a>
       <a class="card" href="#/expr"><span class="card-kicker">표현 사전</span><span class="card-title">${state.mastered.size}/${state.expressions.length}</span><span class="card-sub">익힌 표현</span></a>
-      <a class="card" href="#/settings"><span class="card-kicker">모드</span><span class="card-title">${modeLabel(state.settings.mode)}</span><span class="card-sub">속도 ${state.settings.rate}× · 반복 ${state.settings.repeat}회</span></a>
+      <a class="card" href="#/stats"><span class="card-kicker">나의 기록</span><span class="card-title">🔥 ${streak()}일</span><span class="card-sub">연속 학습 · 녹음 ${stats().totals.recs}개</span></a>
     </div>
     <aside class="safety">
       <b>🚗 운전 중 사용 팁</b>
@@ -228,8 +289,97 @@ function renderHome() {
         <li>폰을 거치대에 두고 화면을 켜 두면 가장 안정적으로 재생됩니다.</li>
       </ul>
     </aside>`);
+  updateHomeStrip();
   document.getElementById('continue').onclick = () => { loadScene(target, { index: startIndex, autoplay: true }); go('#/scene/' + target.id); };
   document.getElementById('drill').onclick = () => startDrill(shuffle(state.expressions.filter((e) => !state.mastered.has(e.id))).slice(0, 15), '표현 드라이브 · 랜덤 15');
+}
+
+function updateHomeStrip() {
+  const el = document.getElementById('homeStrip');
+  if (!el) return;
+  const d = todayStats();
+  const goal = state.settings.dailyGoal;
+  const min = Math.floor(d.ms / 60000);
+  const pct = Math.min(100, Math.round((d.ms / (goal * 60000)) * 100));
+  const unread = stats().unread || 0;
+  el.innerHTML = `
+    <span class="streak">🔥 <b>${streak()}</b>일</span>
+    <span class="today">오늘 ${min}/${goal}분 · 대사 ${d.lines}줄 · 복습 ${d.reviews}</span>
+    ${unread ? `<span class="letter-badge">💌 ${unread}</span>` : ''}
+    <span class="goal"><i style="width:${pct}%"></i></span>`;
+}
+
+// ---------- stats ----------
+async function renderStats() {
+  const t = stats().totals;
+  const cal = calendar(35);
+  const scores = Object.values(getScores());
+  const avg = scores.length ? Math.round(scores.reduce((n, s) => n + s.best, 0) / scores.length) : null;
+  const letters = stats().letters || [];
+  const level = (d) => {
+    const v = d.lines + d.reviews + d.recs * 2 + d.ms / 60000;
+    return v === 0 ? 0 : v < 10 ? 1 : v < 30 ? 2 : v < 60 ? 3 : 4;
+  };
+  shell('나의 기록', `
+    <section class="stat-hero">
+      <div><b>🔥 ${streak()}</b><small>연속 학습일</small></div>
+      <div><b>${activeDays()}</b><small>총 학습일</small></div>
+      <div><b>${Math.round(t.ms / 60000)}</b><small>총 학습(분)</small></div>
+    </section>
+    <section class="panel"><h3>최근 5주</h3>
+      <div class="cal">${cal.map((c) => `<i class="lv${level(c.day)}" title="${c.k}"></i>`).join('')}</div>
+    </section>
+    <section class="panel"><h3>누적</h3>
+      <div class="stat-grid">
+        <div><b>${t.lines}</b><small>따라 말한 대사</small></div>
+        <div><b>${state.done.size}</b><small>완료한 장면</small></div>
+        <div><b>${t.reviews}</b><small>단어 복습</small></div>
+        <div><b>${t.graduated}</b><small>졸업한 단어</small></div>
+        <div><b>${t.recs}</b><small>녹음</small></div>
+        <div><b>${avg ?? '–'}</b><small>평균 최고점</small></div>
+      </div>
+    </section>
+    <section class="panel"><h3>💌 받은 편지</h3>
+      ${letters.length ? `<ul class="letters">${letters.map((l) => `<li><button class="ghost" data-letter="${l.id}">${esc(l.title)} <small class="muted">${new Date(l.date).toLocaleDateString('ko-KR')}</small></button></li>`).join('')}</ul>`
+        : '<p class="muted small">막(Act)을 끝내거나 7일 연속, 대사 500줄 같은 큰 고비를 넘으면 편지가 도착해요.</p>'}
+    </section>
+    <section class="panel"><h3>🎙 내 목소리의 성장</h3><div id="recs"><p class="muted small">불러오는 중…</p></div></section>
+    <section class="panel"><h3>설정</h3>
+      <label class="field"><span>하루 목표 <b id="v-goal">${state.settings.dailyGoal}분</b></span>
+        <input type="range" id="goal" min="5" max="60" step="5" value="${state.settings.dailyGoal}"></label>
+      <label class="switch block"><input type="checkbox" id="vm" ${state.settings.voiceMotivation ? 'checked' : ''}><span>재생 중 응원 메시지 음성으로 듣기<small>카드 사이에 짧게 한국어+영어로</small></span></label>
+    </section>`, { back: '#/' });
+
+  document.getElementById('goal').oninput = (e) => { state.settings.dailyGoal = +e.target.value; saveSettings(); document.getElementById('v-goal').textContent = e.target.value + '분'; };
+  document.getElementById('vm').onchange = (e) => { state.settings.voiceMotivation = e.target.checked; saveSettings(); };
+  $app.querySelectorAll('[data-letter]').forEach((b) => b.onclick = () => openLetter(letters.find((l) => l.id === b.dataset.letter)));
+
+  // Recordings grouped by line: first take vs latest take.
+  const $recs = document.getElementById('recs');
+  let all = [];
+  try { all = await listAll(); } catch { /* IndexedDB unavailable */ }
+  const groups = new Map();
+  for (const r of all) { if (!groups.has(r.key)) groups.set(r.key, []); groups.get(r.key).push(r); }
+  if (!groups.size) { $recs.innerHTML = '<p class="muted small">장면 화면에서 대사 옆 🎙을 눌러 녹음해 보세요. 같은 대사를 며칠 뒤 다시 녹음하면 "처음의 나 vs 지금의 나"를 비교할 수 있어요.</p>'; return; }
+  const list = [...groups.values()].map((g) => g.sort((a, b) => a.created - b.created)).sort((a, b) => b.at(-1).created - a.at(-1).created).slice(0, 20);
+  $recs.innerHTML = `<ul class="rec-groups">${list.map((g, i) => `
+    <li>
+      <p class="rg-text">“${esc(g[0].text)}” <small class="muted">${esc(g[0].sp)} · p.${g[0].page}</small></p>
+      <div class="row wrap">
+        <button class="ghost" data-g="${i}" data-m="last">▶ 최근 (${relTime(g.at(-1).created)})</button>
+        ${g.length >= 2 ? `<button class="ghost hl" data-g="${i}" data-m="then">${relTime(g[0].created)}의 나 vs ${relTime(g.at(-1).created)}의 나</button>` : ''}
+        <a class="ghost" href="#/scene/${g[0].sceneId}">장면</a>
+      </div>
+    </li>`).join('')}</ul>`;
+  $recs.querySelectorAll('[data-g]').forEach((b) => b.onclick = async () => {
+    const g = list[+b.dataset.g];
+    player.pause(); cancelSpeech(); stopPlayback();
+    if (b.dataset.m === 'last') return playBlob(g.at(-1).blob);
+    toast(`${relTime(g[0].created)}의 나 → ${relTime(g.at(-1).created)}의 나`);
+    await playBlob(g[0].blob);
+    await new Promise((r) => setTimeout(r, 500));
+    await playBlob(g.at(-1).blob);
+  });
 }
 
 function startDrill(list, title) {
@@ -325,7 +475,8 @@ function renderScene(scene) {
     if (it.t === 'd') {
       return `<li class="line role-${roleOf(it.sp)}${it.text.length > 160 ? ' long' : ''}" data-item="${i}">
         <span class="sp">${esc(it.sp)}${it.paren ? ` <em>(${esc(it.paren)})</em>` : ''}</span>
-        <span class="tx">${renderLine(it.text, scene.id)}</span></li>`;
+        <span class="tx">${renderLine(it.text, scene.id)}</span>
+        <button class="mic" data-practice aria-label="말하기 연습">🎙</button></li>`;
     }
     if (it.t === 'a') return `<li class="action" data-item="${i}">${esc(it.text)}</li>`;
     return `<li class="transition">${esc(it.text)}</li>`;
@@ -357,6 +508,7 @@ function renderScene(scene) {
   const $role = document.getElementById('role');
   if ($role) $role.onchange = () => { s.myRole = $role.value; saveSettings(); };
   $app.querySelectorAll('.lines [data-item]').forEach((li) => li.onclick = (ev) => {
+    if (ev.target.closest('[data-practice]')) return openPracticeSheet(scene, +li.dataset.item);
     const w = ev.target.closest('.w');
     if (w && li.classList.contains('line')) {
       openWordSheet(scene, +li.dataset.item, +w.dataset.w, ev.target.closest('mark')?.dataset.e);
@@ -493,6 +645,7 @@ function openWordSheet(scene, itemIndex, wordIndex, exprId) {
     if (x === 'play') { closeSheet(); playFromItem(itemIndex); }
     if (x === 'add') {
       const cur = curated();
+      const isNew = !myDict.has(phrase());
       myDict.add({
         text: phrase(),
         headword: result?.headword || '',
@@ -505,6 +658,7 @@ function openWordSheet(scene, itemIndex, wordIndex, exprId) {
       });
       draw();
       toast(`"${phrase()}" 저장 · 오늘 복습 ${myDict.due().length}개`);
+      if (isNew) deliver(track('saved', { count: myDict.all().length }));
       // refresh saved underline in the script
       $app.querySelectorAll(`.lines [data-item="${itemIndex}"] .tx`).forEach((el) => { el.innerHTML = renderLine(item.text, scene.id); });
     }
@@ -512,11 +666,196 @@ function openWordSheet(scene, itemIndex, wordIndex, exprId) {
   refresh();
 }
 
-function toast(msg) {
+// Toasts queue up so several messages in a row are all readable.
+const toastQueue = [];
+let toastBusy = false;
+function toast(msg, icon = '') {
+  toastQueue.push(icon ? `${icon} ${msg}` : msg);
+  if (!toastBusy) nextToast();
+}
+function nextToast() {
+  const msg = toastQueue.shift();
+  if (!msg) { toastBusy = false; return; }
+  toastBusy = true;
   document.getElementById('toast')?.remove();
   const t = Object.assign(document.createElement('div'), { id: 'toast', className: 'toast', textContent: msg });
   document.body.appendChild(t);
-  setTimeout(() => t.remove(), 2200);
+  setTimeout(() => { t.remove(); nextToast(); }, 2600);
+}
+
+// ---------- letters ----------
+function openLetter(letter) {
+  if (!letter) return;
+  markLettersRead();
+  closeSheet();
+  const root = document.createElement('div');
+  root.id = 'sheet-root';
+  document.body.appendChild(root);
+  root.innerHTML = `
+    <div class="sheet-backdrop" data-x="close"></div>
+    <section class="sheet letter" role="dialog" aria-label="편지">
+      <div class="sheet-handle"></div>
+      <p class="eyebrow">💌 Letters From Your Commute · ${new Date(letter.date).toLocaleDateString('ko-KR')}</p>
+      <h3>${esc(letter.title)}</h3>
+      <div class="paper">${esc(letter.en).replace(/\n/g, '<br>')}</div>
+      <p class="muted small">${esc(letter.ko)}</p>
+      <div class="sheet-actions">
+        <button class="card primary slim" data-x="read">▶ 읽어주기</button>
+        <button class="ghost" data-x="close">닫기</button>
+      </div>
+    </section>`;
+  root.addEventListener('click', (ev) => {
+    const x = ev.target.closest('[data-x]')?.dataset.x;
+    if (x === 'close') { cancelSpeech(); closeSheet(); updateHomeStrip(); }
+    if (x === 'read') { player.pause(); cancelSpeech(); speak(letter.en.replace(/\n+/g, ' '), { voiceName: state.settings.voices.theodore, rate: state.settings.rate * 0.95 }); }
+  });
+}
+
+// ---------- practice sheet: record + compare + pronunciation score ----------
+const relTime = (ts) => {
+  const d = Math.floor((Date.now() - ts) / 86400000);
+  if (d <= 0) { const h = Math.floor((Date.now() - ts) / 3600000); return h <= 0 ? '방금' : `${h}시간 전`; }
+  if (d === 1) return '어제';
+  if (d < 7) return `${d}일 전`;
+  if (d < 30) return `${Math.floor(d / 7)}주 전`;
+  return `${Math.floor(d / 30)}달 전`;
+};
+const scoreKey = (k) => 'score:' + k;
+const getScores = () => LS.get('scores', {});
+
+function openPracticeSheet(scene, itemIndex) {
+  player.pause();
+  closeSheet();
+  const item = scene.items[itemIndex];
+  const chunks = chunkLine(item.text);
+  let ci = 0;
+  let recorder = null, recTimer = null, listener = null;
+  let busy = ''; // '' | 'rec' | 'listen' | 'compare'
+  let result = null; // last score result for current chunk
+  let history = [];
+  const root = document.createElement('div');
+  root.id = 'sheet-root';
+  document.body.appendChild(root);
+  const key = () => `${scene.id}:${itemIndex}:${ci}`;
+  const text = () => chunks[ci];
+  const sayOriginal = () => speak(text(), { voiceName: state.settings.voices[roleOf(item.sp)], rate: state.settings.rate });
+
+  async function loadHistory() { try { history = await listByKey(key()); } catch { history = []; } }
+
+  function draw(note = '') {
+    const sc = getScores()[scoreKey(key())];
+    const target = result
+      ? result.words.map((w) => `<span class="${w.ok ? 'ok' : 'miss'}">${esc(w.text)}</span>`).join(' ')
+      : esc(text());
+    const first = history[0], last = history[history.length - 1];
+    root.innerHTML = `
+      <div class="sheet-backdrop" data-x="close"></div>
+      <section class="sheet practice" role="dialog" aria-label="말하기 연습">
+        <div class="sheet-handle"></div>
+        <p class="muted tiny">${esc(item.sp)} · p.${item.page}${sc ? ` · 최고 ${sc.best}점` : ''}</p>
+        ${chunks.length > 1 ? `<div class="modes wrap">${chunks.map((_, i) => `<button class="chip ${i === ci ? 'on' : ''}" data-chunk="${i}">${i + 1}/${chunks.length}</button>`).join('')}</div>` : ''}
+        <p class="target">${target}</p>
+        ${result ? `<div class="score-box"><b class="score ${result.score >= 90 ? 'hi' : result.score >= 70 ? 'mid' : 'lo'}">${result.score}</b>
+          <span><small>들린 문장</small><br>“${esc(result.heard)}”</span></div>` : ''}
+        ${note ? `<p class="status">${esc(note)}</p>` : ''}
+        <div class="pr-row">
+          <button class="pr-btn" data-x="orig" ${busy ? 'disabled' : ''}>▶<small>원문</small></button>
+          <button class="pr-btn rec ${busy === 'rec' ? 'on' : ''}" data-x="rec" ${!canRecord() || (busy && busy !== 'rec') ? 'disabled' : ''}>${busy === 'rec' ? '■' : '🎙'}<small>${busy === 'rec' ? '<span id="rect">0초</span> 정지' : '녹음'}</small></button>
+          <button class="pr-btn ${busy === 'listen' ? 'on' : ''}" data-x="score" ${!canScore() || (busy && busy !== 'listen') ? 'disabled' : ''}>${busy === 'listen' ? '■' : '🗣'}<small>${busy === 'listen' ? '듣는 중…' : '발음 채점'}</small></button>
+        </div>
+        ${!canScore() ? '<p class="muted tiny">이 브라우저는 음성 인식을 지원하지 않아요. Android Chrome에서 사용하세요.</p>' : ''}
+        <h4>내 목소리 ${history.length ? `(${history.length})` : ''}</h4>
+        ${history.length ? `
+          <div class="row wrap">
+            <button class="ghost" data-x="ab" ${busy ? 'disabled' : ''}>원문 ↔ 최근 내 목소리</button>
+            ${history.length >= 2 ? `<button class="ghost hl" data-x="then" ${busy ? 'disabled' : ''}>${relTime(first.created)}의 나 vs ${relTime(last.created)}의 나</button>` : ''}
+          </div>
+          <ul class="rec-list">${history.slice().reverse().map((r) => `
+            <li><button class="icon-btn" data-play="${r.id}" aria-label="재생">▶</button>
+              <span>${relTime(r.created)} <small class="muted">${new Date(r.created).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · ${(r.dur / 1000).toFixed(1)}초</small></span>
+              <button class="icon-btn" data-del="${r.id}" aria-label="삭제">✕</button></li>`).join('')}</ul>`
+          : '<p class="muted small">녹음해 두면 원문과 번갈아 듣고, 나중에 "처음의 나"와 비교할 수 있어요. 첫 녹음은 계속 보관돼요.</p>'}
+        <p class="muted tiny">녹음은 이 기기에만 저장됩니다. 발음 채점은 브라우저 음성 인식이 알아들은 단어를 기준으로 해요.</p>
+      </section>`;
+  }
+
+  async function stopRec() {
+    if (!recorder) return;
+    clearInterval(recTimer);
+    const { blob, mime, dur } = await recorder.stop();
+    recorder = null; busy = '';
+    if (dur < 400) return draw('너무 짧아요. 다시 녹음해 보세요.');
+    await saveRecording({ key: key(), text: text(), sp: item.sp, sceneId: scene.id, itemIndex, page: item.page, blob, mime, dur, created: Date.now() });
+    deliver(track('rec'));
+    await loadHistory();
+    draw('저장했어요. 원문 → 내 목소리로 들려줄게요.');
+    busy = 'compare'; draw('원문 → 내 목소리');
+    await sayOriginal();
+    await playBlob(blob);
+    busy = ''; draw();
+  }
+
+  async function compareAB(a, b, label) {
+    busy = 'compare';
+    draw(label);
+    await sayOriginal();
+    if (a) { draw(`${label} · ${relTime(a.created)}`); await playBlob(a.blob); }
+    if (b) { draw(`${label} · ${relTime(b.created)}`); await playBlob(b.blob); }
+    busy = ''; draw();
+  }
+
+  root.addEventListener('click', async (ev) => {
+    const chunkBtn = ev.target.closest('[data-chunk]');
+    if (chunkBtn && !busy) { ci = +chunkBtn.dataset.chunk; result = null; await loadHistory(); return draw(); }
+    const playId = ev.target.closest('[data-play]')?.dataset.play;
+    if (playId && !busy) { const r = history.find((h) => h.id === +playId); if (r) playBlob(r.blob); return; }
+    const delId = ev.target.closest('[data-del]')?.dataset.del;
+    if (delId && !busy) { if (confirm('이 녹음을 지울까요?')) { await deleteRecording(+delId); await loadHistory(); draw(); } return; }
+    const x = ev.target.closest('[data-x]')?.dataset.x;
+    if (!x) return;
+    if (x === 'close') {
+      if (recorder) { clearInterval(recTimer); await recorder.stop().catch(() => {}); recorder = null; }
+      listener?.stop(); stopPlayback(); cancelSpeech(); closeSheet(); return;
+    }
+    if (x === 'orig' && !busy) { cancelSpeech(); sayOriginal(); }
+    if (x === 'rec') {
+      if (busy === 'rec') return stopRec();
+      if (busy) return;
+      cancelSpeech(); stopPlayback();
+      try {
+        recorder = await startRecording();
+        busy = 'rec'; draw('말해보세요. 다 하면 ■ 정지');
+        const t0 = Date.now();
+        recTimer = setInterval(() => { const el = document.getElementById('rect'); if (el) el.textContent = Math.floor((Date.now() - t0) / 1000) + '초'; }, 300);
+      } catch (e) { busy = ''; draw('마이크를 쓸 수 없어요: ' + (e.message || e.name)); }
+    }
+    if (x === 'score') {
+      if (busy === 'listen') { listener?.stop(); return; }
+      if (busy) return;
+      cancelSpeech(); stopPlayback();
+      busy = 'listen'; result = null; draw('문장을 말해보세요…');
+      try {
+        listener = listen((interim) => { const s = root.querySelector('.status'); if (s) s.textContent = '🗣 ' + interim; });
+        const alts = await listener.result;
+        result = scoreAgainst(text(), alts);
+        const all = getScores();
+        const k = scoreKey(key());
+        const prev = all[k]?.best;
+        all[k] = { best: Math.max(prev ?? 0, result.score), last: result.score, n: (all[k]?.n || 0) + 1, at: Date.now() };
+        LS.set('scores', all);
+        busy = '';
+        const missed = result.words.filter((w) => !w.ok).length;
+        draw(result.score === 100 ? '완벽해요!' : `놓친 단어 ${missed}개 (빨간색). 원문을 듣고 다시 해보세요.`);
+        deliver(track('score', { score: result.score, prev }));
+      } catch (e) { busy = ''; draw(e.message); }
+      listener = null;
+    }
+    if (x === 'ab' && !busy && history.length) compareAB(null, history[history.length - 1], '원문 → 최근 내 목소리');
+    if (x === 'then' && !busy && history.length >= 2) compareAB(history[0], history[history.length - 1], '처음의 나 → 최근의 나');
+  });
+
+  loadHistory().then(() => draw());
+  draw();
 }
 
 // ---------- Drill Dictionary ----------
@@ -595,7 +934,7 @@ function renderDrill() {
     const c = player.current; if (!c) return;
     if (c.kind === 'word') {
       hardMarked.delete(c.id);
-      myDict.review(c.id, 'easy');
+      reviewWord(c.id, 'easy');
       hardMarked.add(c.id); // already graded; skip auto-grade at card end
       toast(`"${c.text}" — 다음 복습: ${boxLabel(myDict.get(c.text)?.box)} 뒤`);
       player.next();
@@ -607,7 +946,7 @@ function renderDrill() {
   };
   document.getElementById('hard').onclick = () => {
     const c = player.current; if (c?.kind !== 'word') return;
-    myDict.review(c.id, 'hard');
+    reviewWord(c.id, 'hard');
     hardMarked.add(c.id);
     toast(`"${c.text}" — 오늘 다시 나와요`);
     player.next();
@@ -657,6 +996,7 @@ function renderExpressions(catArg) {
     });
     b.classList.add('on');
     toast(`"${e.en}" Drill Dictionary에 저장`);
+    deliver(track('saved', { count: myDict.all().length }));
   });
   $app.querySelectorAll('[data-master]').forEach((b) => b.onclick = () => {
     const id = b.dataset.master;
@@ -690,6 +1030,8 @@ function renderSettings() {
       ${toggle('drillKoreanFirst', '표현 드라이브: 한국어 뜻 먼저', '끄면 영어만 반복')}
       ${toggle('loopScene', '장면 끝나면 처음부터 반복')}
       ${toggle('wakeLock', '재생 중 화면 켜두기')}
+      ${toggle('voiceMotivation', '응원 메시지 음성으로 듣기', '재생 중 카드 사이에 짧게 한국어+영어로')}
+      ${range('dailyGoal', '하루 목표', 5, 60, 5, (v) => v + '분')}
     </section>
     <section class="panel"><h3>목소리</h3>
       ${voiceSel('theodore', 'Theodore', en)}
@@ -713,7 +1055,7 @@ function renderSettings() {
 
   $app.querySelectorAll('[data-k]').forEach((r) => r.oninput = () => {
     s[r.dataset.k] = +r.value; saveSettings();
-    const fmt = { rate: (v) => v + '×', repeat: (v) => v + '회', gapFactor: (v) => '대사 길이 × ' + v }[r.dataset.k];
+    const fmt = { rate: (v) => v + '×', repeat: (v) => v + '회', gapFactor: (v) => '대사 길이 × ' + v, dailyGoal: (v) => v + '분' }[r.dataset.k];
     document.getElementById('v-' + r.dataset.k).textContent = fmt(+r.value);
   });
   $app.querySelectorAll('[data-t]').forEach((c) => c.onchange = () => {
@@ -839,7 +1181,7 @@ async function boot() {
     saveSettings();
   }
   render();
-  if (state.script) ensurePersistent();
+  if (state.script) { ensurePersistent(); deliver(track('open')); }
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }

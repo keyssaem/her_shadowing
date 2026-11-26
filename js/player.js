@@ -65,6 +65,7 @@ export class Player {
     this.kind = 'scene'; // 'scene' | 'drill'
     this.keepAlive = null;
     this.wakeLock = null;
+    this.queue = []; // announcements spoken between cards (motivation messages)
     this.setupMediaSession();
   }
 
@@ -161,6 +162,23 @@ export class Player {
     return token === this.token;
   }
 
+  /** Queue steps to be spoken at the next card boundary. */
+  announce(steps) { this.queue.push(...steps); }
+
+  async flushAnnouncements(token) {
+    while (this.queue.length) {
+      if (token !== this.token) { this.queue = []; return false; }
+      const st = this.queue.shift();
+      this.status = st.label || '💬';
+      this.chunk = null;
+      this.emit();
+      if (st.type === 'speak') await speak(st.text, st);
+      else if (st.type === 'wait') { if (!(await this.sleep(st.ms, token))) return false; }
+      else if (st.type === 'beep') await beep(st.freq);
+    }
+    return token === this.token;
+  }
+
   async run() {
     const token = ++this.token;
     while (this.playing && token === this.token && this.index < this.cards.length) {
@@ -178,14 +196,21 @@ export class Player {
       if (token !== this.token) return;
       this.onCardDone?.(this.current, this.index);
       if (this.index >= this.cards.length - 1) {
-        if (this.getSettings().loopScene) { this.index = 0; continue; }
+        if (this.getSettings().loopScene) {
+          this.onFinished?.();
+          if (!(await this.flushAnnouncements(token))) return;
+          this.index = 0;
+          continue;
+        }
+        this.onFinished?.();
+        if (!(await this.flushAnnouncements(token))) return;
         this.playing = false;
         this.status = '끝';
         this.stopKeepAlive();
-        this.onFinished?.();
         this.emit();
         return;
       }
+      if (!(await this.flushAnnouncements(token))) return;
       this.index++;
     }
   }
