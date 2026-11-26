@@ -6,6 +6,7 @@ import { track, streak, stats, todayStats, activeDays, calendar } from './motiva
 import { listAll, playBlob, stopPlayback, listen } from './recorder.js';
 import { LS, state, saveSettings, ensurePersistent, hydrate, $app, esc, sceneById, sceneTitle, dialogueCount, shuffle, player, pickExpressions, planDrive, loadScene, loadDrill, relTime, getScores, favLines } from './core.js';
 import { go, shell, toast, openLetter } from './ui.js';
+import { startWordDrill } from './view-study.js';
 
 // ---------- departure screen (#/go) ----------
 // Full-screen, two giant buttons: meant to be opened from a home-screen
@@ -110,10 +111,9 @@ export function renderHome() {
   const startIndex = p ? state.progress.index : 0;
   shell('', `
     <section class="hero small">
-      <p class="eyebrow">오늘도 Theodore와 함께</p>
+      <p class="eyebrow">오늘도 Theodore와 함께 (성우쌤 제작 Since 26.11.26)</p>
       <h2>${p ? '이어서 할까요?' : '첫 장면부터 시작해요'}</h2>
     </section>
-    <a class="strip" id="homeStrip" href="#/stats"></a>
     <section class="drive-card">
       <span class="card-kicker">🚗 출발 · 버튼 한 번이면 끝까지 자동 재생</span>
       <span class="drive-sub">${myDict.due().length ? `단어 복습 ${myDict.due().length}개 → ` : ''}핵심 표현 3개 → "${esc(sceneTitle(target))}" 이어서${favLines().length ? ' → 명대사' : ''}</span>
@@ -122,46 +122,102 @@ export function renderHome() {
         <button class="drive-btn" data-drive="30"><b>30</b>분 출발</button>
       </div>
     </section>
-    <p class="sec-title">따로 하고 싶을 때</p>
-    <div class="grid2">
-      <button class="card" id="continue">
-        <span class="card-kicker">📖 대본 이어 보기</span>
-        <span class="card-title small">${esc(sceneTitle(target))}</span>
-        <span class="card-sub">${p ? `${startIndex + 1}번째 대사부터` : '처음부터'} · ${modeLabel(state.settings.mode)}</span>
-      </button>
-      <button class="card" id="drill">
-        <span class="card-kicker">🔁 표현 복습</span>
-        <span class="card-title small">핵심 표현 15개</span>
-        <span class="card-sub">한국어 듣고 → 영어로 말하기</span>
-      </button>
-    </div>
-    <aside class="safety">
-      <b>🚗 운전 중 사용 팁</b>
-      <ul>
-        <li>출발 전에 재생을 시작하고, 주행 중에는 화면을 보지 마세요.</li>
-        <li>이어폰·핸들 버튼: <b>재생/정지</b>, <b>다음 곡 = 다음 대사</b>, <b>이전 곡 = 다시 듣기</b>.</li>
-        <li>폰을 거치대에 두고 화면을 켜 두면 가장 안정적으로 재생됩니다.</li>
-      </ul>
-    </aside>`);
+    <section class="today-card" id="homeStrip"></section>`);
+  homeTarget = { scene: target, index: startIndex };
   updateHomeStrip();
   $app.querySelectorAll('[data-drive]').forEach((b) => b.onclick = () => startDrive(+b.dataset.drive));
-  document.getElementById('continue').onclick = () => { loadScene(target, { index: startIndex, autoplay: true }); go('#/scene/' + target.id); };
-  document.getElementById('drill').onclick = () => startDrill(pickExpressions(15), '🔁 표현 복습 · 15개');
+  if (!LS.get('onboarded', false)) openOnboarding();
+}
+
+// ---------- "오늘 할 일": three checklist rows under the start button ----------
+let homeTarget = null;
+function todayTasks() {
+  const d = todayStats();
+  const goal = state.settings.dailyGoal;
+  const min = Math.floor(d.ms / 60000);
+  const saved = myDict.all().length;
+  const due = myDict.due();
+  const sc = homeTarget?.scene;
+  return [
+    saved === 0
+      ? { id: 'words', done: false, title: '단어 1개 모으기', sub: '📖 대본에서 모르는 단어를 길게 눌러 저장' }
+      : due.length
+        ? { id: 'words', done: false, title: `복습 단어 ${due.length}개`, sub: '내 단어장 · 끝까지 들으면 복습 완료' }
+        : { id: 'words', done: true, title: '단어 복습', sub: d.reviews ? `오늘 ${d.reviews}개 복습 완료` : '오늘 복습할 단어 없음' },
+    { id: 'scene', done: d.scenes > 0, title: d.scenes > 0 ? `장면 ${d.scenes}개 완료` : '새 장면 1개', sub: sc ? sceneTitle(sc) : '' },
+    { id: 'goal', done: d.ms >= goal * 60000, title: `${goal}분 학습`, sub: `지금 ${min}분`, pct: Math.min(100, Math.round((d.ms / (goal * 60000)) * 100)) },
+  ];
 }
 
 export function updateHomeStrip() {
   const el = document.getElementById('homeStrip');
   if (!el) return;
-  const d = todayStats();
-  const goal = state.settings.dailyGoal;
-  const min = Math.floor(d.ms / 60000);
-  const pct = Math.min(100, Math.round((d.ms / (goal * 60000)) * 100));
+  const tasks = todayTasks();
+  const doneN = tasks.filter((t) => t.done).length;
   const unread = stats().unread || 0;
   el.innerHTML = `
-    <span class="streak">🔥 <b>${streak()}</b>일</span>
-    <span class="today">오늘 ${min}/${goal}분 · 대사 ${d.lines}줄 · 복습 ${d.reviews}</span>
-    ${unread ? `<span class="letter-badge">💌 ${unread}</span>` : ''}
-    <span class="goal"><i style="width:${pct}%"></i></span>`;
+    <div class="today-head">
+      <b>오늘 할 일 <span class="muted">${doneN}/3</span></b>
+      <a href="#/stats" class="streak">🔥 ${streak()}일 연속</a>
+      ${unread ? `<a href="#/stats" class="letter-badge">💌 편지 ${unread}</a>` : ''}
+    </div>
+    ${tasks.map((t) => `
+      <button class="task ${t.done ? 'done' : ''}" data-task="${t.id}">
+        <span class="check" aria-hidden="true">${t.done ? '✓' : ''}</span>
+        <span class="task-body"><b>${esc(t.title)}</b><small>${esc(t.sub)}</small>
+          ${t.pct != null ? `<span class="task-bar"><i style="width:${t.pct}%"></i></span>` : ''}</span>
+        <span class="go-arrow" aria-hidden="true">›</span>
+      </button>`).join('')}`;
+  el.querySelectorAll('[data-task]').forEach((b) => b.onclick = () => {
+    const id = b.dataset.task;
+    if (id === 'words') {
+      const due = myDict.due();
+      if (!myDict.all().length) return go('#/scenes');
+      if (due.length) return startWordDrill(due, '내 단어장 · 오늘 복습');
+      return go('#/mydict');
+    }
+    if (id === 'scene' && homeTarget?.scene) {
+      loadScene(homeTarget.scene, { index: homeTarget.index, autoplay: true });
+      return go('#/scene/' + homeTarget.scene.id);
+    }
+    if (id === 'goal') return go('#/stats');
+  });
+}
+
+// ---------- first-run guide (3 cards) ----------
+const GUIDE = [
+  { icon: '🚗', title: '출발 버튼 한 번이면 끝', body: '출발 전에 <b>15분 / 30분</b>만 누르세요. 단어 복습 → 핵심 표현 → 대본 이어서 → 명대사까지 자동으로 재생돼요.<br><br><b>운전 중엔 화면 대신</b> 핸들·이어폰 버튼: 재생/정지, <b>다음 곡</b> = 다음 대사, <b>이전 곡</b> = 다시 듣기.' },
+  { icon: '📖', title: '대본에서 모으기', body: '<b>대사를 누르면</b> 메뉴가 열려요: ▶ 여기부터 · 🎙 말하기 연습 · ✍ 받아쓰기 · ☆ 명대사.<br><br><b>단어를 길게 누르면</b> 영어 뜻이 나오고, 내 단어장에 저장할 수 있어요.' },
+  { icon: '🔁', title: '잊을 때쯤 다시', body: '모은 단어와 핵심 표현은 1일 → 2일 → 4일 → 1주… 간격으로 다시 나와요.<br><br>끝까지 들으면 <b>알아요</b>, 이전 곡 버튼은 <b>다시 볼래요</b>로 기록돼요. 진행 상황은 📊 기록 탭에서 볼 수 있어요.' },
+];
+export function openOnboarding() {
+  let i = 0;
+  document.getElementById('sheet-root')?.remove();
+  const root = document.createElement('div');
+  root.id = 'sheet-root';
+  document.body.appendChild(root);
+  const finish = () => { LS.set('onboarded', true); root.remove(); };
+  const draw = () => {
+    const g = GUIDE[i];
+    root.innerHTML = `
+      <div class="sheet-backdrop"></div>
+      <section class="sheet guide" role="dialog" aria-label="사용 안내">
+        <div class="guide-dots">${GUIDE.map((_, k) => `<i class="${k === i ? 'on' : ''}"></i>`).join('')}</div>
+        <div class="guide-icon">${g.icon}</div>
+        <h3>${g.title}</h3>
+        <p>${g.body}</p>
+        <div class="guide-actions">
+          <button class="btn-secondary" data-g="skip">${i === GUIDE.length - 1 ? '이전' : '건너뛰기'}</button>
+          <button class="btn-primary" data-g="next">${i === GUIDE.length - 1 ? '시작하기' : '다음'}</button>
+        </div>
+      </section>`;
+  };
+  root.addEventListener('click', (ev) => {
+    const g = ev.target.closest('[data-g]')?.dataset.g;
+    if (g === 'next') { if (i < GUIDE.length - 1) { i++; draw(); } else finish(); }
+    if (g === 'skip') { if (i === GUIDE.length - 1) { i--; draw(); } else finish(); }
+  });
+  draw();
 }
 
 // ---------- stats ----------

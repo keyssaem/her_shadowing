@@ -2,7 +2,7 @@ import { englishVoices, koreanVoices, speak, cancelSpeech } from './tts.js';
 import { hasScene, translatedCount, translateScene, getKey, setKey } from './translate.js';
 import { exportRecordings, importRecordings } from './recorder.js';
 import { LS, state, saveSettings, ensurePersistent, $app, esc, sceneById, sceneTitle, dialogueCount, player, loadScene } from './core.js';
-import { importFile } from './view-home.js';
+import { importFile, openOnboarding } from './view-home.js';
 import { shell, toast } from './ui.js';
 
 // ---------- settings ----------
@@ -19,31 +19,43 @@ export function renderSettings() {
   const toggle = (k, label, hint = '') => `
     <label class="switch block"><input type="checkbox" data-t="${k}" ${s[k] ? 'checked' : ''}><span>${label}${hint ? `<small>${hint}</small>` : ''}</span></label>`;
 
+  const fold = (title, sub, inner) => `
+    <details class="panel fold"><summary><span><b>${title}</b><small>${sub}</small></span></summary>${inner}</details>`;
+
   shell('설정', `
-    <section class="panel"><h3>재생</h3>
+    <section class="panel"><h3>자주 쓰는 설정</h3>
       ${range('rate', '말하기 속도', 0.6, 1.3, 0.05, (v) => v + '×')}
       ${range('repeat', '따라 말하기 반복 횟수', 1, 4, 1, (v) => v + '회')}
       ${range('gapFactor', '따라 말할 시간', 0.8, 2.5, 0.1, (v) => '대사 길이 × ' + v)}
-      ${toggle('narration', '지문(장면 묘사)도 읽기', '듣기 연습용. 따라 말할 시간 없이 읽음')}
-      ${toggle('roleReveal', '역할 연기: 내 차례 뒤 정답 들려주기')}
-      ${toggle('drillKoreanFirst', '표현 복습: 한국어 뜻 먼저', '끄면 영어만 반복')}
-      ${toggle('loopScene', '장면 끝나면 처음부터 반복')}
-      ${toggle('wakeLock', '재생 중 화면 켜두기')}
-      ${toggle('voiceMotivation', '응원 메시지 음성으로 듣기', '재생 중 카드 사이에 짧게 한국어+영어로')}
       ${range('dailyGoal', '하루 목표', 5, 60, 5, (v) => v + '분')}
-      ${toggle('autoSpeed', '장면 속도 자동 단계', '장면을 끝까지 할 때마다 "말하기 속도" −0.15 → −0.05 → 그대로. 예: 0.95면 0.8 → 0.9 → 0.95배')}
+      ${voiceSel('theodore', 'Theodore 목소리', en)}
+      ${voiceSel('samantha', 'Samantha 목소리', en)}
     </section>
-    <section class="panel"><h3>한국어 해석 (Claude API)</h3>
+    ${fold('재생 세부 설정', '속도 자동 단계 · 응원 메시지 · 화면 켜두기 등', `
+      ${toggle('autoSpeed', '장면 속도 자동 단계', '장면을 끝까지 할 때마다 "말하기 속도" −0.15 → −0.05 → 그대로. 예: 0.95면 0.8 → 0.9 → 0.95배')}
+      ${toggle('voiceMotivation', '응원 메시지 음성으로 듣기', '재생 중 카드 사이에 짧게 한국어+영어로')}
+      ${toggle('wakeLock', '재생 중 화면 켜두기')}
+      ${toggle('drillKoreanFirst', '표현 복습: 한국어 뜻 먼저', '끄면 영어만 반복')}
+      ${toggle('roleReveal', '역할 연기: 내 차례 뒤 정답 들려주기')}
+      ${toggle('narration', '지문(장면 묘사)도 읽기', '듣기 연습용. 따라 말할 시간 없이 읽음')}
+      ${toggle('loopScene', '장면 끝나면 처음부터 반복')}`)}
+    ${fold('목소리 더보기', '다른 인물 · 지문 · 한국어 목소리', `
+      ${voiceSel('female', '다른 여성 인물', en)}
+      ${voiceSel('male', '다른 남성 인물', en)}
+      ${voiceSel('narrator', '지문 · TEXT VOICE', en)}
+      ${voiceSel('korean', '한국어 뜻', ko)}
+      <p class="muted small">기기에 설치된 음성을 씁니다. Android는 'Google 텍스트 음성 변환', iPhone은 설정 › 손쉬운 사용 › 음성 콘텐츠 › 음성에서 고품질(향상된) 영어 음성을 받으면 훨씬 자연스러워집니다.</p>`)}
+    <details class="panel fold"><summary><span><b>한국어 해석 · AI 대화 (Claude API)</b><small>${getKey() ? 'API 키 저장됨' : 'API 키 필요'}</small></span></summary>
       <p class="muted small">대사를 Claude로 번역해 이 기기에만 저장합니다. 본인의 Anthropic API 키가 필요하고(console.anthropic.com), 키는 이 기기에만 저장되며 번역할 대사와 함께 Anthropic API로만 전송됩니다. 대본 전체 해석 비용은 대략 1~2달러로 예상됩니다.</p>
       <label class="field"><span>API 키</span>
         <span class="row"><input type="password" id="apikey" class="text-in" placeholder="sk-ant-..." value="${esc(getKey())}" autocomplete="off">
         <button class="ghost" id="saveKey">저장</button></span></label>
       ${toggle('showKo', '장면에서 해석 보기', '드라이브 화면에도 대사 아래 표시')}
       <p class="muted small">해석된 장면: <b id="koCount">${translatedCount()}</b> / ${state.script ? state.script.scenes.filter((x) => dialogueCount(x) > 0).length : 0}</p>
-      <div class="row wrap"><button class="ghost" id="koAll">남은 장면 모두 해석하기</button></div>
+      <div class="row wrap"><button class="ghost" id="koAll" ${getKey() ? '' : 'disabled'}>남은 장면 모두 해석하기${getKey() ? '' : '<small class="why">API 키 필요</small>'}</button></div>
       <p id="koStatus" class="status"></p>
-    </section>
-    <section class="panel"><h3>학습 데이터 백업</h3>
+    </details>
+    <details class="panel fold"><summary><span><b>학습 데이터 백업</b><small>폰을 바꾸기 전에 꼭</small></span></summary>
       <p class="muted small">진도·내 단어장·점수·연속 학습일·편지·해석·녹음을 파일 하나로 저장합니다. 폰을 바꾸거나 크롬 데이터를 지우기 전에 받아두세요. API 키는 백업에 넣지 않습니다.</p>
       <label class="switch block"><input type="checkbox" id="bkScript" checked><span>대본 데이터도 포함<small>끄면 복원 후 PDF를 다시 불러와야 해요</small></span></label>
       <div class="row wrap">
@@ -51,17 +63,8 @@ export function renderSettings() {
         <label class="ghost">⬆ 백업에서 복원<input type="file" id="restore" accept=".json,application/json" hidden></label>
       </div>
       <p id="bkStatus" class="status"></p>
-    </section>
-    <section class="panel"><h3>목소리</h3>
-      ${voiceSel('theodore', 'Theodore', en)}
-      ${voiceSel('samantha', 'Samantha', en)}
-      ${voiceSel('female', '다른 여성 인물', en)}
-      ${voiceSel('male', '다른 남성 인물', en)}
-      ${voiceSel('narrator', '지문 · TEXT VOICE', en)}
-      ${voiceSel('korean', '한국어 뜻', ko)}
-      <p class="muted small">기기에 설치된 음성을 씁니다. Android는 'Google 텍스트 음성 변환', iPhone은 설정 › 손쉬운 사용 › 음성 콘텐츠 › 음성에서 고품질(향상된) 영어 음성을 받으면 훨씬 자연스러워집니다.</p>
-    </section>
-    <section class="panel"><h3>데이터</h3>
+    </details>
+    <details class="panel fold"><summary><span><b>대본 데이터 · 초기화</b><small>다시 불러오기 · 저장 상태 · 기록 초기화</small></span></summary>
       ${state.script ? `<p class="muted small">불러온 대본: 장면 ${state.script.stats.scenes}개 · 대사 ${state.script.stats.dialogue}줄</p>
       <p class="muted small" id="persist">저장 상태 확인 중…</p>` : ''}
       <div class="row wrap">
@@ -70,7 +73,9 @@ export function renderSettings() {
         <button class="ghost danger" id="reset">학습 기록 초기화</button>
       </div>
       <p id="status" class="status"></p>
-    </section>`, { back: '#/' });
+    </details>
+    <button class="ghost block" id="guideAgain">📘 사용 안내 다시 보기</button>`, { back: '#/' });
+  document.getElementById('guideAgain').onclick = () => openOnboarding();
 
   $app.querySelectorAll('[data-k]').forEach((r) => r.oninput = () => {
     s[r.dataset.k] = +r.value; saveSettings();
@@ -107,6 +112,9 @@ export function renderSettings() {
   document.getElementById('saveKey').onclick = () => {
     setKey(document.getElementById('apikey').value);
     toast(getKey() ? 'API 키를 저장했어요 (이 기기에만)' : 'API 키를 지웠어요');
+    const all = document.getElementById('koAll');
+    all.disabled = !getKey();
+    all.innerHTML = '남은 장면 모두 해석하기' + (getKey() ? '' : '<small class="why">API 키 필요</small>');
   };
   document.getElementById('koAll').onclick = async (ev) => {
     if (!getKey()) return toast('API 키를 먼저 저장하세요.');

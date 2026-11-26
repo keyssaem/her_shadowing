@@ -114,7 +114,7 @@ export function renderScene(scene) {
     </div>
     <div class="modes sub">
       <span class="chip ghosty" title="장면을 끝까지 할 때마다 기본 속도 −0.15 → −0.05 → 기본 속도">${s.autoSpeed ? `⏩ ${sceneRate(scene.id)}× · ${scenePlays(scene.id) + 1}회차` : `⏩ ${s.rate}×`}</span>
-      <button class="chip ${s.showKo && hasScene(scene.id) ? 'on' : ''}" id="koBtn">${hasScene(scene.id) ? (s.showKo ? '🇰🇷 해석 숨기기' : '🇰🇷 해석 보기') : '🇰🇷 이 장면 해석하기'}</button>
+      <button class="chip ${s.showKo && hasScene(scene.id) ? 'on' : ''}" id="koBtn">${hasScene(scene.id) ? (s.showKo ? '🇰🇷 해석 숨기기' : '🇰🇷 해석 보기') : getKey() ? '🇰🇷 이 장면 해석하기' : '🇰🇷 해석 <small class="why">API 키 필요</small>'}</button>
       <button class="chip" id="dictBtn">✍ 받아쓰기</button>
     </div>
     ${exprs.length ? `<details class="exprs"><summary>이 장면의 핵심 표현 ${exprs.length}개</summary>
@@ -465,8 +465,8 @@ export function openPracticeSheet(scene, itemIndex, opts = {}) {
         ${note ? `<p class="status">${esc(note)}</p>` : ''}
         <div class="pr-row">
           <button class="pr-btn" data-x="orig" ${busy ? 'disabled' : ''}>▶<small>원문</small></button>
-          <button class="pr-btn rec ${busy === 'rec' ? 'on' : ''}" data-x="rec" ${!canRecord() || (busy && busy !== 'rec') ? 'disabled' : ''}>${busy === 'rec' ? '■' : '🎙'}<small>${busy === 'rec' ? '<span id="rect">0초</span> 정지' : '녹음'}</small></button>
-          <button class="pr-btn ${busy === 'listen' ? 'on' : ''}" data-x="score" ${!canScore() || (busy && busy !== 'listen') ? 'disabled' : ''}>${busy === 'listen' ? '■' : '🗣'}<small>${busy === 'listen' ? '듣는 중…' : '발음 채점'}</small></button>
+          <button class="pr-btn rec ${busy === 'rec' ? 'on' : ''}" data-x="rec" ${!canRecord() || (busy && busy !== 'rec') ? 'disabled' : ''}>${busy === 'rec' ? '■' : '🎙'}<small>${busy === 'rec' ? '<span id="rect">0초</span> 정지' : canRecord() ? '녹음' : '녹음 · 미지원 기기'}</small></button>
+          <button class="pr-btn ${busy === 'listen' ? 'on' : ''}" data-x="score" ${!canScore() || (busy && busy !== 'listen') ? 'disabled' : ''}>${busy === 'listen' ? '■' : '🗣'}<small>${busy === 'listen' ? '듣는 중…' : canScore() ? '발음 채점' : '채점 · Chrome 필요'}</small></button>
         </div>
         ${!canScore() ? '<p class="muted tiny">이 브라우저는 음성 인식을 지원하지 않아요. Android Chrome에서 사용하세요.</p>' : ''}
         <h4>내 목소리 ${history.length ? `(${history.length})` : ''}</h4>
