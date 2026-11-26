@@ -321,6 +321,21 @@ mark { background: color-mix(in srgb, var(--accent2) 30%, transparent); color: i
   box-shadow: inset 0 0 0 1px #ecd9c3;
 }
 
+/* today's drive */
+.drive-card {
+  display: flex; flex-direction: column; gap: 6px; padding: 16px; margin-bottom: 12px;
+  border-radius: var(--radius); background: linear-gradient(135deg, var(--accent), #c9452f); color: #fff;
+}
+.drive-card .card-kicker { color: #ffe9e2; }
+.drive-sub { font-size: 14px; color: #fff3ee; }
+.drive-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 6px; }
+.drive-btn {
+  height: 72px; border-radius: 16px; border: 0; background: #fff; color: #c9452f; font-size: 16px; font-weight: 700;
+}
+.drive-btn b { font-size: 30px; margin-right: 2px; }
+.drive-btn:active { transform: scale(.97); }
+.drill-en.line-text { font-size: 22px; font-weight: 600; color: var(--text); }
+
 @media (max-width: 380px) {
   .card-title { font-size: 19px; }
   .ctl { height: 58px; }

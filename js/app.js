@@ -1,7 +1,7 @@
 import { extractLines, parseScript } from './parser.js';
 import { ACTS, CATEGORIES, annotateScenes, linkExpressions } from './content.js';
 import { Player } from './player.js';
-import { loadVoices, englishVoices, koreanVoices, defaultVoices, speak, cancelSpeech, roleOf } from './tts.js';
+import { loadVoices, englishVoices, koreanVoices, defaultVoices, speak, cancelSpeech, roleOf, estimateSeconds } from './tts.js';
 import { lookup, guessPos, myDict, keyOf, boxLabel } from './dict.js';
 import { track, lineLetter, streak, stats, todayStats, activeDays, calendar, markLettersRead } from './motivate.js';
 import {
@@ -108,30 +108,33 @@ player.onCardDone = (card) => {
     deliver(track('line', { mode: state.settings.mode === 'listen' ? 'listen' : 'speak' }));
     deliver([lineLetter()]);
   }
-  if (player.kind === 'scene' && card.sceneId) {
-    state.progress = { sceneId: card.sceneId, index: player.index };
+  if ((card.kind === 'line' || card.kind === 'action') && card.sceneId && card.sceneIdx != null) {
+    state.progress = { sceneId: card.sceneId, index: card.sceneIdx };
     LS.set('progress', state.progress);
   }
+  if (card.lastOfScene) completeScene(card.sceneId, card.nextSceneId);
 };
 player.onFinished = () => {
-  if (player.kind === 'scene' && player.sceneId) {
-    const scene = sceneById(player.sceneId);
-    const firstTime = !state.done.has(player.sceneId);
-    state.done.add(player.sceneId);
-    LS.set('done', [...state.done]);
-    state.progress = { sceneId: player.sceneId, index: 0 };
-    LS.set('progress', state.progress);
-    if (firstTime && scene) {
-      const actScenes = state.script.scenes.filter((s) => s.act === scene.act && dialogueCount(s) > 0);
-      const actDone = actScenes.every((s) => state.done.has(s.id)) ? scene.act : null;
-      deliver(track('scene', {
-        title: sceneTitle(scene), lines: dialogueCount(scene),
-        actDone, actName: ACTS[scene.act - 1].ko, actEn: `Act ${scene.act}, ${ACTS[scene.act - 1].en}`,
-      }));
-    }
-  }
+  if (player.kind === 'scene' && player.sceneId) completeScene(player.sceneId);
   deliver(track('session'));
 };
+
+/** Mark a scene finished, move progress on, and celebrate (first time only). */
+function completeScene(sceneId, nextSceneId = null) {
+  const scene = sceneById(sceneId);
+  const firstTime = !state.done.has(sceneId);
+  state.done.add(sceneId);
+  LS.set('done', [...state.done]);
+  state.progress = nextSceneId ? { sceneId: nextSceneId, index: 0 } : { sceneId, index: 0 };
+  LS.set('progress', state.progress);
+  if (!firstTime || !scene) return;
+  const actScenes = state.script.scenes.filter((s) => s.act === scene.act && dialogueCount(s) > 0);
+  const actDone = actScenes.every((s) => state.done.has(s.id)) ? scene.act : null;
+  deliver(track('scene', {
+    title: sceneTitle(scene), lines: dialogueCount(scene),
+    actDone, actName: ACTS[scene.act - 1].ko, actEn: `Act ${scene.act}, ${ACTS[scene.act - 1].en}`,
+  }));
+}
 
 // Count listening time while playing (daily goal + stats).
 setInterval(() => {
@@ -144,7 +147,76 @@ function sceneCards(scene) {
     if (it.t === 'd') cards.push({ kind: 'line', sp: it.sp, text: it.text, paren: it.paren, itemIndex, sceneId: scene.id });
     else if (it.t === 'a' && state.settings.narration) cards.push({ kind: 'action', text: it.text, itemIndex, sceneId: scene.id });
   });
+  cards.forEach((c, i) => { c.sceneIdx = i; });
   return cards;
+}
+
+// ---------- today's drive ----------
+// One tap before leaving: word review → 3 key expressions → continue the story,
+// sized to the chosen minutes using the current speed / repeat / gap settings.
+function cardSeconds(card) {
+  return player.stepsFor(card).reduce((sum, st) => sum + (
+    st.type === 'speak' ? estimateSeconds(st.text, st.rate || 1)
+      : st.type === 'wait' ? st.ms / 1000 : 0.3), 0);
+}
+const exprCard = (e) => ({ kind: 'expr', id: e.id, en: e.en, ko: e.ko, note: e.note, sp: e.source?.sp, source: e.source });
+
+function planDrive(minutes) {
+  const budget = minutes * 60;
+  const cards = [];
+  let used = 0;
+  const push = (c) => { cards.push(c); used += cardSeconds(c); };
+  const cue = (ko) => ({ kind: 'cue', ko, text: ko });
+
+  // 1) Word review: due items, at most ~30% of the time.
+  const words = [];
+  let wUsed = 0;
+  for (const i of myDict.due()) {
+    const c = wordCard(i);
+    const s = cardSeconds(c);
+    if (wUsed + s > budget * 0.3) break;
+    words.push(c); wUsed += s;
+  }
+  // 2) Three key expressions not yet mastered.
+  const pool = state.expressions.filter((e) => !state.mastered.has(e.id));
+  const exprs = shuffle(pool.length >= 3 ? pool : state.expressions).slice(0, 3).map(exprCard);
+
+  // 3) Story: continue from saved progress through the following scenes.
+  const order = state.script.scenes.filter((s) => dialogueCount(s) > 0 && (!state.settings.keyOnly || s.key));
+  let si = Math.max(0, order.findIndex((s) => s.id === state.progress?.sceneId));
+  let startIdx = state.progress && order[si]?.id === state.progress.sceneId ? state.progress.index : 0;
+  const firstScene = order[si];
+
+  push(cue(`오늘의 드라이브 ${minutes}분. ${words.length ? `단어 복습 ${words.length}개, ` : ''}핵심 표현 세 개, 그리고 ${sceneTitle(firstScene)} 장면을 이어서 할게요.`));
+  if (words.length) { push(cue('먼저 단어 복습.')); words.forEach(push); }
+  push(cue('핵심 표현 세 개.'));
+  exprs.forEach(push);
+
+  let first = true;
+  const sceneTitles = [];
+  while (used < budget && si < order.length) {
+    const scene = order[si];
+    const list = sceneCards(scene).slice(startIdx);
+    if (!list.length) { si++; startIdx = 0; continue; }
+    push(cue(first ? `이제 장면 이어서. ${sceneTitle(scene)}.` : `다음 장면. ${sceneTitle(scene)}.`));
+    sceneTitles.push(sceneTitle(scene));
+    first = false;
+    for (let k = 0; k < list.length && used < budget; k++) {
+      const c = list[k];
+      if (k === list.length - 1) { c.lastOfScene = true; c.nextSceneId = order[si + 1]?.id || null; }
+      push(c);
+    }
+    si++; startIdx = 0;
+  }
+  return { cards, minutes, est: Math.round(used / 60), words: words.length, scenes: sceneTitles };
+}
+
+function startDrive(minutes) {
+  const plan = planDrive(minutes);
+  player.load({ cards: plan.cards, index: 0, title: `🚗 오늘의 드라이브 · ${minutes}분`, kind: 'drive' });
+  player.sceneId = null;
+  player.play();
+  go('#/drill');
 }
 
 function loadScene(scene, { index = 0, autoplay = false } = {}) {
@@ -265,7 +337,15 @@ function renderHome() {
       <h2>${p ? '이어서 할까요?' : '첫 장면부터 시작해요'}</h2>
     </section>
     <a class="strip" id="homeStrip" href="#/stats"></a>
-    <button class="card primary" id="continue">
+    <section class="drive-card">
+      <span class="card-kicker">🚗 오늘의 드라이브 · 출발 전에 한 번만</span>
+      <span class="drive-sub">${myDict.due().length ? `단어 복습 ${myDict.due().length}개 → ` : ''}핵심 표현 3개 → "${esc(sceneTitle(target))}" 이어서</span>
+      <div class="drive-btns">
+        <button class="drive-btn" data-drive="15"><b>15</b>분</button>
+        <button class="drive-btn" data-drive="30"><b>30</b>분</button>
+      </div>
+    </section>
+    <button class="card" id="continue">
       <span class="card-kicker">${p ? '이어서' : '시작'} · ${ACTS[target.act - 1].ko} · p.${target.page}</span>
       <span class="card-title">${esc(sceneTitle(target))}</span>
       <span class="card-sub">${p ? `${startIndex + 1}번째 대사부터 · ` : ''}${modeLabel(state.settings.mode)} 모드로 바로 재생 ▶</span>
@@ -290,6 +370,7 @@ function renderHome() {
       </ul>
     </aside>`);
   updateHomeStrip();
+  $app.querySelectorAll('[data-drive]').forEach((b) => b.onclick = () => startDrive(+b.dataset.drive));
   document.getElementById('continue').onclick = () => { loadScene(target, { index: startIndex, autoplay: true }); go('#/scene/' + target.id); };
   document.getElementById('drill').onclick = () => startDrill(shuffle(state.expressions.filter((e) => !state.mastered.has(e.id))).slice(0, 15), '표현 드라이브 · 랜덤 15');
 }
@@ -910,7 +991,7 @@ function renderMyDict() {
 
 // ---------- drill ----------
 function renderDrill() {
-  if (player.kind !== 'drill') return go('#/expr');
+  if (player.kind !== 'drill' && player.kind !== 'drive') return go('#/expr');
   state.view = 'drill';
   $app.innerHTML = `
     <header class="top">
@@ -1095,7 +1176,7 @@ function renderSettings() {
 function miniBar() {
   if (!player.cards.length) return '';
   return `<div class="mini" id="mini">
-    <a class="mini-info" href="${player.kind === 'drill' ? '#/drill' : '#/scene/' + player.sceneId}">
+    <a class="mini-info" href="${player.kind === 'scene' ? '#/scene/' + player.sceneId : '#/drill'}">
       <small>${esc(player.title)}</small><span id="miniText"></span></a>
     <button class="icon-btn big" id="miniPlay" aria-label="재생/정지"></button></div>`;
 }
@@ -1147,6 +1228,20 @@ function updatePlayerUI(force = false) {
     const li = $app.querySelector('.lines .active');
     if (li) li.classList.toggle('my-turn', /내 차례/.test(player.status));
   }
+  if (state.view === 'drill' && c && (c.kind === 'line' || c.kind === 'cue' || c.kind === 'action')) {
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    const sc = c.sceneId && sceneById(c.sceneId);
+    set('dcount', `${player.index + 1} / ${player.cards.length}`);
+    set('dko', c.kind === 'line' ? c.sp + (c.paren ? ` (${c.paren})` : '') : c.kind === 'cue' ? '🚗' : '지문');
+    set('den', c.kind === 'cue' ? c.ko : c.text);
+    set('dnote', sc ? `${sceneTitle(sc)} · p.${sc.page}` : '');
+    set('dsrc', '');
+    const den = document.getElementById('den'); if (den) den.classList.toggle('line-text', c.kind !== 'cue');
+    const m = document.getElementById('master'); if (m) m.hidden = true;
+    const h = document.getElementById('hard'); if (h) h.hidden = true;
+    return;
+  }
+  { const m = document.getElementById('master'); if (m) m.hidden = false; const den = document.getElementById('den'); if (den) den.classList.remove('line-text'); }
   if (state.view === 'drill' && c && c.kind === 'word') {
     const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
     set('dcount', `${player.index + 1} / ${player.cards.length} · ${boxLabel(myDict.get(c.text)?.box)}`);

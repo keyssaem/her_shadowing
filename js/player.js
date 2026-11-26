@@ -86,7 +86,7 @@ export class Player {
       const c = this.current;
       try {
         navigator.mediaSession.metadata = new MediaMetadata({
-          title: (c.kind !== 'word' && c.sp ? c.sp + ': ' : '') + (c.text || c.en || '').slice(0, 80),
+          title: (c.kind === 'line' && c.sp ? c.sp + ': ' : '') + (c.text || c.en || c.ko || '').slice(0, 80),
           artist: this.title,
           album: 'Her Shadowing',
         });
@@ -229,6 +229,14 @@ export class Player {
     };
     const gapMs = (text) => Math.round(estimateSeconds(text, rate) * s.gapFactor * 1000) + 400;
     const steps = [];
+
+    if (card.kind === 'cue') {
+      // Spoken section announcement inside a drive session.
+      steps.push({ type: 'beep', freq: 784, label: '🚗 ' + card.ko });
+      steps.push({ type: 'speak', text: card.ko, voiceName: s.voices.korean, lang: 'ko-KR', rate: 1.05, label: '🚗 ' + card.ko });
+      steps.push({ type: 'wait', ms: 400 });
+      return steps;
+    }
 
     if (card.kind === 'action') {
       steps.push({ type: 'speak', text: speakable(card.text), ...voiceFor(null), rate: rate * 1.05, label: '지문' });
