@@ -1,5 +1,5 @@
 // Offline cache: app shell (network-first so updates land) + pdf.js from CDN (cache-first).
-const CACHE = 'her-shadowing-v4';
+const CACHE = 'her-shadowing-v5';
 const SHELL = [
   './', 'index.html', 'css/style.css', 'manifest.webmanifest', 'icon.svg',
   'js/app.js', 'js/parser.js', 'js/content.js', 'js/player.js', 'js/tts.js', 'js/dict.js',

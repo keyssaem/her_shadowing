@@ -393,7 +393,28 @@ function updateHomeStrip() {
 // ---------- stats ----------
 async function renderStats() {
   const t = stats().totals;
-  const cal = calendar(35);
+  // 12-week grass: columns are weeks (Mon→Sun), the last column ends today.
+  const dow = (new Date().getDay() + 6) % 7; // Monday = 0
+  const cal = calendar(7 * 11 + dow + 1);
+  const week = calendar(7);
+  const prevWeek = calendar(14).slice(0, 7);
+  const sum = (list, f) => list.reduce((n, c) => n + f(c.day), 0);
+  const wMin = Math.round(sum(week, (d) => d.ms) / 60000);
+  const pwMin = Math.round(sum(prevWeek, (d) => d.ms) / 60000);
+  const wLines = sum(week, (d) => d.lines);
+  const maxMin = Math.max(1, ...week.map((c) => c.day.ms / 60000));
+  const DOW = ['일', '월', '화', '수', '목', '금', '토'];
+  // Act progress (scenes with dialogue).
+  const acts = ACTS.map((a) => {
+    const list = state.script.scenes.filter((s) => s.act === a.n && dialogueCount(s) > 0);
+    const done = list.filter((s) => state.done.has(s.id)).length;
+    return { ...a, total: list.length, done, pct: list.length ? Math.round((done / list.length) * 100) : 0 };
+  });
+  // Drill Dictionary by review interval.
+  const words = myDict.all();
+  const boxes = [0, 1, 2, 3, 4, 5, 6].map((b) => words.filter((w) => w.box === b).length);
+  const maxBox = Math.max(1, ...boxes);
+  const dueNow = myDict.due().length;
   const scores = Object.values(getScores());
   const avg = scores.length ? Math.round(scores.reduce((n, s) => n + s.best, 0) / scores.length) : null;
   const letters = stats().letters || [];
@@ -407,8 +428,50 @@ async function renderStats() {
       <div><b>${activeDays()}</b><small>총 학습일</small></div>
       <div><b>${Math.round(t.ms / 60000)}</b><small>총 학습(분)</small></div>
     </section>
-    <section class="panel"><h3>최근 5주</h3>
-      <div class="cal">${cal.map((c) => `<i class="lv${level(c.day)}" title="${c.k}"></i>`).join('')}</div>
+    <section class="panel"><h3>최근 12주</h3>
+      <div class="grass-wrap">
+        <div class="grass-dow"><span>월</span><span></span><span>수</span><span></span><span>금</span><span></span><span>일</span></div>
+        <div class="grass">${cal.map((c) => `<i class="lv${level(c.day)}" title="${c.k} · ${Math.round(c.day.ms / 60000)}분 · 대사 ${c.day.lines}줄"></i>`).join('')}</div>
+      </div>
+      <div class="legend"><small>적음</small><i class="lv0"></i><i class="lv1"></i><i class="lv2"></i><i class="lv3"></i><i class="lv4"></i><small>많음</small></div>
+    </section>
+    <section class="panel"><h3>최근 7일</h3>
+      <p class="week-sum"><b>${wMin}분</b> · 대사 ${wLines}줄
+        ${pwMin || wMin ? `<span class="delta ${wMin >= pwMin ? 'up' : 'down'}">지난주보다 ${wMin >= pwMin ? '+' : '−'}${Math.abs(wMin - pwMin)}분</span>` : ''}</p>
+      <div class="bars" role="img" aria-label="최근 7일 학습 시간">
+        ${week.map((c, i) => {
+          const m = Math.round(c.day.ms / 60000);
+          const today = i === 6;
+          return `<div class="bar-col${today ? ' today' : ''}">
+            <span class="bar-val">${m ? m + '분' : ''}</span>
+            <span class="bar-track"><i style="height:${(c.day.ms / 60000 / maxMin) * 100}%"></i></span>
+            <span class="bar-lines">${c.day.lines ? c.day.lines + '줄' : '·'}</span>
+            <span class="bar-day">${today ? '오늘' : DOW[c.date.getDay()]}</span>
+          </div>`;
+        }).join('')}
+      </div>
+      <p class="muted tiny">막대: 학습 시간 · 아래 숫자: 따라 말한 대사 · 목표 ${state.settings.dailyGoal}분/일</p>
+    </section>
+    <section class="panel"><h3>막별 진행률</h3>
+      ${acts.map((a) => `
+        <div class="act-row">
+          <span class="act-name">${esc(a.ko)}</span>
+          <span class="act-track"><i style="width:${a.pct}%"></i></span>
+          <span class="act-num">${a.done}/${a.total}</span>
+        </div>`).join('')}
+      <p class="muted tiny">대사가 있는 장면 기준 · 장면을 끝까지 재생하면 완료</p>
+    </section>
+    <section class="panel"><h3>Drill Dictionary 복습 단계</h3>
+      ${words.length ? `
+        <p class="week-sum"><b>${words.length}개</b> 저장 · 오늘 복습 ${dueNow}개 · 졸업 ${boxes[6]}개</p>
+        ${boxes.map((n, b) => `
+          <div class="act-row">
+            <span class="act-name">${b === 6 ? '🎓 ' : ''}${boxLabel(b)}</span>
+            <span class="act-track box${b}"><i style="width:${(n / maxBox) * 100}%"></i></span>
+            <span class="act-num">${n}</span>
+          </div>`).join('')}
+        <p class="muted tiny">새 단어 → 1일 → 2일 → 4일 → 1주 → 2주 → 1달(졸업). 끝까지 들으면 한 단계 위로, '어려워요'는 처음으로.</p>`
+        : '<p class="muted small">대본에서 단어를 눌러 저장하면 여기서 단계별로 보여요.</p>'}
     </section>
     <section class="panel"><h3>누적</h3>
       <div class="stat-grid">
