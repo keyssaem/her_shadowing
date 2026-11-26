@@ -8,6 +8,10 @@
   "orientation": "portrait",
   "background_color": "#1b1311",
   "theme_color": "#1b1311",
+  "shortcuts": [
+    { "name": "출발 (오늘의 드라이브)", "short_name": "출발", "url": "./#/go", "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }] },
+    { "name": "Drill Dictionary", "short_name": "단어장", "url": "./#/mydict", "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }] }
+  ],
   "icons": [
     { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
   ]

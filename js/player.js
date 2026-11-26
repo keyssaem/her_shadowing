@@ -67,6 +67,11 @@ export class Player {
     this.wakeLock = null;
     this.queue = []; // announcements spoken between cards (motivation messages)
     this.setupMediaSession();
+    // Browsers drop the screen wake lock whenever the page is hidden (e.g. a
+    // quick look at the navigation app). Take it again when we come back.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && this.playing) this.requestWakeLock();
+    });
   }
 
   load({ cards, index = 0, title = '', kind = 'scene' }) {
@@ -114,7 +119,12 @@ export class Player {
       this.keepAlive.volume = 0.01;
     }
     try { await this.keepAlive.play(); } catch { /* needs gesture */ }
-    try { if ('wakeLock' in navigator && this.getSettings().wakeLock) this.wakeLock = await navigator.wakeLock.request('screen'); } catch { /* ignore */ }
+    await this.requestWakeLock();
+  }
+  async requestWakeLock() {
+    if (!('wakeLock' in navigator) || !this.getSettings().wakeLock) return;
+    if (this.wakeLock && !this.wakeLock.released) return;
+    try { this.wakeLock = await navigator.wakeLock.request('screen'); } catch { /* not allowed right now */ }
   }
   stopKeepAlive() {
     try { this.keepAlive?.pause(); } catch { /* ignore */ }
@@ -217,7 +227,7 @@ export class Player {
 
   stepsFor(card) {
     const s = this.getSettings();
-    const rate = s.rate;
+    const rate = card.rate ?? s.rate; // scene lines may carry an auto speed step
     // Android often exposes a single genderless voice per locale. When a male role
     // ends up on the same voice as Samantha, lower its pitch so speakers stay distinct.
     const voiceFor = (sp) => {

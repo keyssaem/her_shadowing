@@ -355,6 +355,36 @@ mark { background: color-mix(in srgb, var(--accent2) 30%, transparent); color: i
 .act-track.box6 i { background: var(--ok); }
 .act-num { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
 
+/* Korean translation + scene sub toolbar */
+.line .ko { display: block; margin-top: 2px; font-size: 14px; color: var(--muted); }
+.line.active .ko { color: var(--accent2); }
+.modes.sub { padding-top: 6px; }
+.chip.ghosty { background: transparent; color: var(--muted); }
+.text-in { flex: 1; min-width: 0; padding: 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg2); }
+.ghost.block { width: 100%; margin-bottom: 8px; }
+
+/* departure screen */
+.go {
+  min-height: 100dvh; display: flex; flex-direction: column; justify-content: center; gap: 10px;
+  padding: 24px 20px calc(24px + var(--safe-b)); text-align: center; position: relative;
+  background: radial-gradient(120% 80% at 50% 0%, color-mix(in srgb, var(--accent) 35%, var(--bg)) 0%, var(--bg) 70%);
+}
+.go-home { position: absolute; top: calc(env(safe-area-inset-top, 0px) + 12px); right: 16px; font-size: 22px; padding: 8px; color: var(--muted); }
+.go-kicker { margin: 0; font-size: 15px; color: var(--accent2); font-weight: 700; }
+.go-plan { margin: 0; font-size: 20px; font-weight: 700; line-height: 1.35; }
+.go-stat { margin: 0 0 14px; color: var(--muted); font-size: 14px; }
+.go-btns { display: grid; gap: 16px; }
+.go-btn {
+  display: flex; align-items: baseline; justify-content: center; gap: 8px;
+  height: 26dvh; min-height: 150px; border: 0; border-radius: 28px;
+  background: var(--accent); color: #fff; box-shadow: 0 10px 30px #0005;
+}
+.go-btn.alt { background: var(--card); color: var(--text); border: 2px solid var(--accent); }
+.go-btn b { font-size: 84px; line-height: 1; }
+.go-btn span { font-size: 22px; font-weight: 700; }
+.go-btn:active { transform: scale(.98); }
+.go-tip { margin: 14px 0 0; color: var(--muted); font-size: 13px; }
+
 /* today's drive */
 .drive-card {
   display: flex; flex-direction: column; gap: 6px; padding: 16px; margin-bottom: 12px;

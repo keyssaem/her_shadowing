@@ -16,7 +16,7 @@ export const keyOf = (s) => s.toLowerCase().replace(/[‘’]/g, "'").replace(/[
 const cache = ls.get('dictcache', {});
 const saveCache = () => {
   const keys = Object.keys(cache);
-  if (keys.length > 400) keys.slice(0, keys.length - 400).forEach((k) => delete cache[k]);
+  if (keys.length > 200) keys.slice(0, keys.length - 200).forEach((k) => delete cache[k]);
   ls.set('dictcache', cache);
 };
 
@@ -135,5 +135,32 @@ export const myDict = {
   },
   reload() { items = ls.get('mydict', []); },
 };
+
+/**
+ * Spaced-repetition state for items that live elsewhere (e.g. the curated key
+ * expressions). Items without state are "new".
+ */
+export function makeSrs(storageKey) {
+  let st = ls.get(storageKey, {});
+  const save = () => ls.set(storageKey, st);
+  return {
+    get: (id) => st[id],
+    isNew: (id) => !st[id],
+    isDue: (id, now = Date.now()) => !!st[id] && st[id].due <= now,
+    review(id, grade = 'good') {
+      const it = st[id] || { box: 0, due: 0, reviews: 0 };
+      if (grade === 'hard') { it.box = 0; it.due = Date.now(); }
+      else {
+        it.box = Math.min(INTERVALS.length - 1, it.box + (grade === 'easy' ? 2 : 1));
+        it.due = Date.now() + INTERVALS[it.box] * DAY;
+      }
+      it.reviews++;
+      st[id] = it; save();
+      return it;
+    },
+    all: () => st,
+    reload() { st = ls.get(storageKey, {}); },
+  };
+}
 
 export const boxLabel = (box) => ['새 단어', '1일', '2일', '4일', '1주', '2주', '1달'][box] || '';

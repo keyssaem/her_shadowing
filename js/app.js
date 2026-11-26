@@ -2,11 +2,12 @@ import { extractLines, parseScript } from './parser.js';
 import { ACTS, CATEGORIES, annotateScenes, linkExpressions } from './content.js';
 import { Player } from './player.js';
 import { loadVoices, englishVoices, koreanVoices, defaultVoices, speak, cancelSpeech, roleOf, estimateSeconds } from './tts.js';
-import { lookup, guessPos, myDict, keyOf, boxLabel } from './dict.js';
+import { lookup, guessPos, myDict, keyOf, boxLabel, makeSrs } from './dict.js';
+import { getKo, hasScene, translatedCount, translateScene, getKey, setKey } from './translate.js';
 import { track, lineLetter, streak, stats, todayStats, activeDays, calendar, markLettersRead } from './motivate.js';
 import {
   canRecord, startRecording, saveRecording, listByKey, listAll, deleteRecording, playBlob, stopPlayback,
-  canScore, listen, scoreAgainst,
+  canScore, listen, scoreAgainst, exportRecordings, importRecordings,
 } from './recorder.js';
 import { chunkLine } from './player.js';
 
@@ -20,7 +21,7 @@ const LS = {
 const DEFAULT_SETTINGS = {
   mode: 'shadow', myRole: 'THEODORE', rate: 0.95, repeat: 2, gapFactor: 1.3,
   narration: false, roleReveal: true, drillKoreanFirst: true, loopScene: false, wakeLock: true,
-  keyOnly: false, voices: {}, voiceMotivation: true, dailyGoal: 15,
+  keyOnly: false, voices: {}, voiceMotivation: true, dailyGoal: 15, autoSpeed: true, showKo: false,
 };
 
 const state = {
@@ -98,10 +99,15 @@ const reviewWord = (id, grade) => {
 const hardMarked = new Set();
 player.onReplay = (card) => {
   if (card?.kind === 'word') { hardMarked.add(card.id); reviewWord(card.id, 'hard'); }
+  if (card?.kind === 'expr') { hardMarked.add('x:' + card.id); exprSrs.review(card.id, 'hard'); }
 };
 player.onCardDone = (card) => {
   if (card.kind === 'word') {
     if (!hardMarked.delete(card.id)) reviewWord(card.id, 'good');
+    return;
+  }
+  if (card.kind === 'expr') {
+    if (!hardMarked.delete('x:' + card.id)) exprSrs.review(card.id, 'good');
     return;
   }
   if (card.kind === 'line') {
@@ -123,6 +129,14 @@ player.onFinished = () => {
 function completeScene(sceneId, nextSceneId = null) {
   const scene = sceneById(sceneId);
   const firstTime = !state.done.has(sceneId);
+  const plays = LS.get('plays', {});
+  plays[sceneId] = (plays[sceneId] || 0) + 1;
+  LS.set('plays', plays);
+  if (state.settings.autoSpeed && plays[sceneId] < SPEED_STEPS.length) {
+    toast(`다음에 이 장면은 ${SPEED_STEPS[plays[sceneId]]}배로 올려볼게요`, '⏫');
+  } else if (state.settings.autoSpeed && plays[sceneId] === SPEED_STEPS.length) {
+    toast('원래 속도로 끝까지 따라 했어요!', '🏁');
+  }
   state.done.add(sceneId);
   LS.set('done', [...state.done]);
   state.progress = nextSceneId ? { sceneId: nextSceneId, index: 0 } : { sceneId, index: 0 };
@@ -141,11 +155,31 @@ setInterval(() => {
   if (player.playing) deliver(track('tick', { ms: 5000, goalMin: state.settings.dailyGoal }));
 }, 5000);
 
+// Auto speed steps: each full play of a scene moves it up 0.8 → 0.9 → 1.0×.
+const SPEED_STEPS = [0.8, 0.9, 1.0];
+const scenePlays = (sceneId) => LS.get('plays', {})[sceneId] || 0;
+const sceneRate = (sceneId) => (state.settings.autoSpeed
+  ? SPEED_STEPS[Math.min(scenePlays(sceneId), SPEED_STEPS.length - 1)]
+  : state.settings.rate);
+
+// Key expressions get their own spaced-repetition schedule.
+const exprSrs = makeSrs('exprsrs');
+/** n expressions to practise: due ones first, then new ones; never mastered. */
+function pickExpressions(n, list = state.expressions) {
+  const open = list.filter((e) => !state.mastered.has(e.id));
+  const due = open.filter((e) => exprSrs.isDue(e.id)).sort((a, b) => exprSrs.get(a.id).due - exprSrs.get(b.id).due);
+  const fresh = shuffle(open.filter((e) => exprSrs.isNew(e.id)));
+  const picked = [...due, ...fresh].slice(0, n);
+  if (picked.length < n) picked.push(...shuffle(open.filter((e) => !picked.includes(e))).slice(0, n - picked.length));
+  return picked.length ? picked : shuffle(list).slice(0, n);
+}
+
 function sceneCards(scene) {
   const cards = [];
+  const rate = sceneRate(scene.id);
   scene.items.forEach((it, itemIndex) => {
-    if (it.t === 'd') cards.push({ kind: 'line', sp: it.sp, text: it.text, paren: it.paren, itemIndex, sceneId: scene.id });
-    else if (it.t === 'a' && state.settings.narration) cards.push({ kind: 'action', text: it.text, itemIndex, sceneId: scene.id });
+    if (it.t === 'd') cards.push({ kind: 'line', sp: it.sp, text: it.text, paren: it.paren, itemIndex, sceneId: scene.id, rate });
+    else if (it.t === 'a' && state.settings.narration) cards.push({ kind: 'action', text: it.text, itemIndex, sceneId: scene.id, rate });
   });
   cards.forEach((c, i) => { c.sceneIdx = i; });
   return cards;
@@ -177,9 +211,8 @@ function planDrive(minutes) {
     if (wUsed + s > budget * 0.3) break;
     words.push(c); wUsed += s;
   }
-  // 2) Three key expressions not yet mastered.
-  const pool = state.expressions.filter((e) => !state.mastered.has(e.id));
-  const exprs = shuffle(pool.length >= 3 ? pool : state.expressions).slice(0, 3).map(exprCard);
+  // 2) Three key expressions: due for review first, then new ones.
+  const exprs = pickExpressions(3).map(exprCard);
 
   // 3) Story: continue from saved progress through the following scenes.
   const order = state.script.scenes.filter((s) => dialogueCount(s) > 0 && (!state.settings.keyOnly || s.key));
@@ -209,6 +242,30 @@ function planDrive(minutes) {
     si++; startIdx = 0;
   }
   return { cards, minutes, est: Math.round(used / 60), words: words.length, scenes: sceneTitles };
+}
+
+// ---------- departure screen (#/go) ----------
+// Full-screen, two giant buttons: meant to be opened from a home-screen
+// shortcut or a "car Bluetooth connected" routine, then one tap to start.
+function renderGo() {
+  state.view = 'go';
+  const p = state.progress && sceneById(state.progress.sceneId);
+  const next = p || state.script.scenes.find((s) => s.key && !state.done.has(s.id)) || state.script.scenes[0];
+  const due = myDict.due().length;
+  const d = todayStats();
+  $app.innerHTML = `
+    <main class="go">
+      <a class="go-home" href="#/" aria-label="홈으로">✕</a>
+      <p class="go-kicker">🚗 오늘의 드라이브</p>
+      <p class="go-plan">${due ? `단어 ${due}개 → ` : ''}표현 3개 → ${esc(sceneTitle(next))}</p>
+      <p class="go-stat">🔥 ${streak()}일 연속 · 오늘 ${Math.floor(d.ms / 60000)}/${state.settings.dailyGoal}분</p>
+      <div class="go-btns">
+        <button class="go-btn" data-drive="15"><b>15</b><span>분 출발</span></button>
+        <button class="go-btn alt" data-drive="30"><b>30</b><span>분 출발</span></button>
+      </div>
+      <p class="go-tip">출발 후엔 화면 대신 핸들·이어폰 버튼으로 조작하세요</p>
+    </main>`;
+  $app.querySelectorAll('[data-drive]').forEach((b) => b.onclick = () => startDrive(+b.dataset.drive));
 }
 
 function startDrive(minutes) {
@@ -246,6 +303,7 @@ function render() {
   if (route === 'drill') return renderDrill();
   if (route === 'mydict') return renderMyDict();
   if (route === 'stats') return renderStats();
+  if (route === 'go') return renderGo();
   return renderHome();
 }
 
@@ -372,7 +430,7 @@ function renderHome() {
   updateHomeStrip();
   $app.querySelectorAll('[data-drive]').forEach((b) => b.onclick = () => startDrive(+b.dataset.drive));
   document.getElementById('continue').onclick = () => { loadScene(target, { index: startIndex, autoplay: true }); go('#/scene/' + target.id); };
-  document.getElementById('drill').onclick = () => startDrill(shuffle(state.expressions.filter((e) => !state.mastered.has(e.id))).slice(0, 15), '표현 드라이브 · 랜덤 15');
+  document.getElementById('drill').onclick = () => startDrill(pickExpressions(15), '표현 드라이브 · 복습 우선 15');
 }
 
 function updateHomeStrip() {
@@ -620,6 +678,7 @@ function renderScene(scene) {
       return `<li class="line role-${roleOf(it.sp)}${it.text.length > 160 ? ' long' : ''}" data-item="${i}">
         <span class="sp">${esc(it.sp)}${it.paren ? ` <em>(${esc(it.paren)})</em>` : ''}</span>
         <span class="tx">${renderLine(it.text, scene.id)}</span>
+        ${s.showKo && getKo(scene.id, i) ? `<span class="ko">${esc(getKo(scene.id, i))}</span>` : ''}
         <button class="mic" data-practice aria-label="말하기 연습">🎙</button></li>`;
     }
     if (it.t === 'a') return `<li class="action" data-item="${i}">${esc(it.text)}</li>`;
@@ -637,11 +696,29 @@ function renderScene(scene) {
       ${['listen', 'shadow', 'role'].map((m) => `<button class="chip ${s.mode === m ? 'on' : ''}" data-mode="${m}">${modeLabel(m)}</button>`).join('')}
       ${s.mode === 'role' ? `<select id="role" class="chip-select" aria-label="내 배역">${speakers.map((sp) => `<option ${sp === s.myRole ? 'selected' : ''}>${esc(sp)}</option>`).join('')}</select>` : ''}
     </div>
+    <div class="modes sub">
+      <span class="chip ghosty" title="장면을 끝까지 할 때마다 0.8 → 0.9 → 1.0배">${s.autoSpeed ? `⏩ ${sceneRate(scene.id)}× · ${scenePlays(scene.id) + 1}회차` : `⏩ ${s.rate}×`}</span>
+      <button class="chip ${s.showKo && hasScene(scene.id) ? 'on' : ''}" id="koBtn">${hasScene(scene.id) ? (s.showKo ? '🇰🇷 해석 숨기기' : '🇰🇷 해석 보기') : '🇰🇷 이 장면 해석하기'}</button>
+    </div>
     ${exprs.length ? `<details class="exprs"><summary>이 장면의 핵심 표현 ${exprs.length}개</summary>
       <ul>${exprs.map((e) => `<li><b>${esc(e.en)}</b> — ${esc(e.ko)}${e.note ? `<br><small>${esc(e.note)}</small>` : ''}</li>`).join('')}</ul></details>` : ''}
     <main class="content script"><ol class="lines">${items}</ol></main>
     ${bigBar()}`;
 
+  document.getElementById('koBtn').onclick = async (ev) => {
+    if (hasScene(scene.id)) { s.showKo = !s.showKo; saveSettings(); return renderScene(scene); }
+    if (!getKey()) { toast('설정 › 한국어 해석에서 API 키를 먼저 넣어주세요.'); return go('#/settings'); }
+    const btn = ev.currentTarget;
+    btn.disabled = true; btn.textContent = '🇰🇷 해석 중…';
+    try {
+      await translateScene(scene.id, sceneTitle(scene), scene.items.map((it, i) => ({ ...it, itemIndex: i })).filter((it) => it.t === 'd'));
+      s.showKo = true; saveSettings();
+      renderScene(scene);
+    } catch (e) {
+      btn.disabled = false; btn.textContent = '🇰🇷 이 장면 해석하기';
+      toast(e.message);
+    }
+  };
   $app.querySelectorAll('[data-mode]').forEach((b) => b.onclick = () => {
     s.mode = b.dataset.mode; saveSettings();
     const wasPlaying = player.playing;
@@ -900,7 +977,8 @@ function openPracticeSheet(scene, itemIndex) {
         ${chunks.length > 1 ? `<div class="modes wrap">${chunks.map((_, i) => `<button class="chip ${i === ci ? 'on' : ''}" data-chunk="${i}">${i + 1}/${chunks.length}</button>`).join('')}</div>` : ''}
         <p class="target">${target}</p>
         ${result ? `<div class="score-box"><b class="score ${result.score >= 90 ? 'hi' : result.score >= 70 ? 'mid' : 'lo'}">${result.score}</b>
-          <span><small>들린 문장</small><br>“${esc(result.heard)}”</span></div>` : ''}
+          <span><small>들린 문장</small><br>“${esc(result.heard)}”</span></div>
+          ${result.words.some((w) => !w.ok) ? `<button class="ghost hl block" data-x="missed" ${busy ? 'disabled' : ''}>＋ 놓친 단어 ${new Set(result.words.filter((w) => !w.ok).map((w) => keyOf(w.text))).size}개 → Drill Dictionary</button>` : ''}` : ''}
         ${note ? `<p class="status">${esc(note)}</p>` : ''}
         <div class="pr-row">
           <button class="pr-btn" data-x="orig" ${busy ? 'disabled' : ''}>▶<small>원문</small></button>
@@ -962,6 +1040,29 @@ function openPracticeSheet(scene, itemIndex) {
       listener?.stop(); stopPlayback(); cancelSpeech(); closeSheet(); return;
     }
     if (x === 'orig' && !busy) { cancelSpeech(); sayOriginal(); }
+    if (x === 'missed' && !busy && result) {
+      // Save each missed word with its English definition and this line as context.
+      const missed = [...new Map(result.words.filter((w) => !w.ok).map((w) => [keyOf(w.text), w.text])).values()];
+      busy = 'save'; draw(`놓친 단어 ${missed.length}개 저장 중…`);
+      let added = 0;
+      for (const w of missed) {
+        let r = null;
+        try { r = await lookup(w); } catch { /* offline: save without definition */ }
+        const m = r && (r.meanings.find((x) => x.pos === guessPos('', r.meanings)) || r.meanings[0]);
+        const isNew = !myDict.has(w);
+        myDict.add({
+          text: w, headword: r?.headword || '', phonetic: r?.phonetic || '',
+          pos: m?.pos || '', def: m?.defs[0]?.d || '', ex: m?.defs[0]?.ex || '', ko: '',
+          ctx: { sp: item.sp, text: item.text, sceneId: scene.id, itemIndex, page: item.page },
+        });
+        if (isNew) added++;
+      }
+      busy = '';
+      draw(`${missed.length}개를 Drill Dictionary에 넣었어요${added < missed.length ? ` (새 단어 ${added}개)` : ''}. 운전 중 복습에 나와요.`);
+      if (added) deliver(track('saved', { count: myDict.all().length }));
+      $app.querySelectorAll(`.lines [data-item="${itemIndex}"] .tx`).forEach((el) => { el.innerHTML = renderLine(item.text, scene.id); });
+      return;
+    }
     if (x === 'rec') {
       if (busy === 'rec') return stopRec();
       if (busy) return;
@@ -1084,15 +1185,27 @@ function renderDrill() {
       player.next();
       return;
     }
-    state.mastered.has(c.id) ? state.mastered.delete(c.id) : state.mastered.add(c.id);
-    LS.set('mastered', [...state.mastered]);
-    updatePlayerUI(true);
+    if (c.kind === 'expr') {
+      // "익혔어요" = mastered (out of drills) + a long jump in the review schedule.
+      const on = !state.mastered.has(c.id);
+      on ? state.mastered.add(c.id) : state.mastered.delete(c.id);
+      LS.set('mastered', [...state.mastered]);
+      if (on) { exprSrs.review(c.id, 'easy'); hardMarked.add('x:' + c.id); }
+      updatePlayerUI(true);
+      return;
+    }
   };
   document.getElementById('hard').onclick = () => {
-    const c = player.current; if (c?.kind !== 'word') return;
-    reviewWord(c.id, 'hard');
-    hardMarked.add(c.id);
-    toast(`"${c.text}" — 오늘 다시 나와요`);
+    const c = player.current;
+    if (c?.kind === 'word') {
+      reviewWord(c.id, 'hard');
+      hardMarked.add(c.id);
+      toast(`"${c.text}" — 오늘 다시 나와요`);
+    } else if (c?.kind === 'expr') {
+      exprSrs.review(c.id, 'hard');
+      hardMarked.add('x:' + c.id);
+      toast(`"${c.en}" — 오늘 다시 나와요`);
+    } else return;
     player.next();
   };
   bindBigBar();
@@ -1111,7 +1224,7 @@ function renderExpressions(catArg) {
     <ul class="expr-list">${list.map((e) => `
       <li class="${state.mastered.has(e.id) ? 'mastered' : ''}">
         <div class="ex-main">
-          <b>${esc(e.en)}</b>
+          <b>${esc(e.en)} <span class="box">${exprSrs.isNew(e.id) ? '' : boxLabel(exprSrs.get(e.id).box) + (exprSrs.isDue(e.id) ? ' · 복습' : '')}</span></b>
           <span>${esc(e.ko)}</span>
           ${e.note ? `<small>${esc(e.note)}</small>` : ''}
           ${e.source ? `<a class="src" href="#/scene/${e.source.sceneId}">${esc(e.source.sp)} · p.${e.source.page}</a>` : ''}
@@ -1123,8 +1236,7 @@ function renderExpressions(catArg) {
         </div>
       </li>`).join('')}</ul>`, { back: '#/' });
   document.getElementById('drillAll').onclick = () => {
-    const pool = list.filter((e) => !state.mastered.has(e.id));
-    startDrill(shuffle(pool.length ? pool : list), (cat || '전체') + ' 드라이브');
+    startDrill(pickExpressions(list.length, list), (cat || '전체') + ' 드라이브');
   };
   $app.querySelectorAll('[data-say]').forEach((b) => b.onclick = () => {
     const e = state.expressions.find((x) => x.id === b.dataset.say);
@@ -1176,6 +1288,26 @@ function renderSettings() {
       ${toggle('wakeLock', '재생 중 화면 켜두기')}
       ${toggle('voiceMotivation', '응원 메시지 음성으로 듣기', '재생 중 카드 사이에 짧게 한국어+영어로')}
       ${range('dailyGoal', '하루 목표', 5, 60, 5, (v) => v + '분')}
+      ${toggle('autoSpeed', '장면 속도 자동 단계', '장면을 끝까지 할 때마다 0.8 → 0.9 → 1.0배. 켜면 장면 대사에는 위 "말하기 속도" 대신 적용')}
+    </section>
+    <section class="panel"><h3>한국어 해석 (Claude API)</h3>
+      <p class="muted small">대사를 Claude로 번역해 이 기기에만 저장합니다. 본인의 Anthropic API 키가 필요하고(console.anthropic.com), 키는 이 기기에만 저장되며 번역할 대사와 함께 Anthropic API로만 전송됩니다. 대본 전체 해석 비용은 대략 1~2달러로 예상됩니다.</p>
+      <label class="field"><span>API 키</span>
+        <span class="row"><input type="password" id="apikey" class="text-in" placeholder="sk-ant-..." value="${esc(getKey())}" autocomplete="off">
+        <button class="ghost" id="saveKey">저장</button></span></label>
+      ${toggle('showKo', '장면에서 해석 보기', '드라이브 화면에도 대사 아래 표시')}
+      <p class="muted small">해석된 장면: <b id="koCount">${translatedCount()}</b> / ${state.script ? state.script.scenes.filter((x) => dialogueCount(x) > 0).length : 0}</p>
+      <div class="row wrap"><button class="ghost" id="koAll">남은 장면 모두 해석하기</button></div>
+      <p id="koStatus" class="status"></p>
+    </section>
+    <section class="panel"><h3>학습 데이터 백업</h3>
+      <p class="muted small">진도·Drill Dictionary·점수·연속 학습일·편지·해석·녹음을 파일 하나로 저장합니다. 폰을 바꾸거나 크롬 데이터를 지우기 전에 받아두세요. API 키는 백업에 넣지 않습니다.</p>
+      <label class="switch block"><input type="checkbox" id="bkScript" checked><span>대본 데이터도 포함<small>끄면 복원 후 PDF를 다시 불러와야 해요</small></span></label>
+      <div class="row wrap">
+        <button class="ghost" id="backup">⬇ 백업 파일 만들기</button>
+        <label class="ghost">⬆ 백업에서 복원<input type="file" id="restore" accept=".json,application/json" hidden></label>
+      </div>
+      <p id="bkStatus" class="status"></p>
     </section>
     <section class="panel"><h3>목소리</h3>
       ${voiceSel('theodore', 'Theodore', en)}
@@ -1227,6 +1359,75 @@ function renderSettings() {
   });
   const $re = document.getElementById('reimport');
   $re.onchange = () => $re.files[0] && importFile($re.files[0], $st);
+
+  // Korean translation
+  document.getElementById('saveKey').onclick = () => {
+    setKey(document.getElementById('apikey').value);
+    toast(getKey() ? 'API 키를 저장했어요 (이 기기에만)' : 'API 키를 지웠어요');
+  };
+  document.getElementById('koAll').onclick = async (ev) => {
+    if (!getKey()) return toast('API 키를 먼저 저장하세요.');
+    const btn = ev.currentTarget;
+    const $ks = document.getElementById('koStatus');
+    const todo = state.script.scenes.filter((x) => dialogueCount(x) > 0 && !hasScene(x.id));
+    if (!todo.length) { $ks.textContent = '모든 장면이 이미 해석돼 있어요.'; return; }
+    if (!confirm(`${todo.length}개 장면을 해석할까요? API 사용 요금이 청구됩니다.`)) return;
+    btn.disabled = true;
+    let done = 0;
+    for (const sc of todo) {
+      $ks.textContent = `해석 중… ${done}/${todo.length} · ${sceneTitle(sc)}`;
+      try {
+        await translateScene(sc.id, sceneTitle(sc), sc.items.map((it, i) => ({ ...it, itemIndex: i })).filter((it) => it.t === 'd'));
+        done++;
+        const c = document.getElementById('koCount'); if (c) c.textContent = translatedCount();
+      } catch (e) {
+        $ks.textContent = `멈춤 (${done}/${todo.length}): ${e.message}`;
+        btn.disabled = false;
+        return;
+      }
+    }
+    btn.disabled = false;
+    $ks.textContent = `완료: ${done}개 장면을 해석했어요.`;
+    if (!s.showKo) { s.showKo = true; saveSettings(); const t = $app.querySelector('[data-t="showKo"]'); if (t) t.checked = true; }
+  };
+
+  // Backup / restore of everything the app keeps on this device
+  const $bk = document.getElementById('bkStatus');
+  document.getElementById('backup').onclick = async () => {
+    $bk.textContent = '백업 만드는 중…';
+    const withScript = document.getElementById('bkScript').checked;
+    const data = {};
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k.startsWith('her.') || k === 'her.apikey' || k === 'her.dictcache' || (!withScript && k === 'her.script')) continue;
+      data[k] = localStorage.getItem(k);
+    }
+    let recordings = [];
+    try { recordings = await exportRecordings(); } catch { /* no recordings store */ }
+    const backup = { app: 'her-shadowing', version: 1, exportedAt: new Date().toISOString(), localStorage: data, recordings };
+    const url = URL.createObjectURL(new Blob([JSON.stringify(backup)], { type: 'application/json' }));
+    const a = Object.assign(document.createElement('a'), { href: url, download: `her-shadowing-backup-${new Date().toISOString().slice(0, 10)}.json` });
+    a.click(); setTimeout(() => URL.revokeObjectURL(url), 4000);
+    $bk.textContent = `백업 완료: 녹음 ${recordings.length}개 포함. 파일을 Google Drive 등에 보관하세요.`;
+  };
+  const $rs = document.getElementById('restore');
+  $rs.onchange = async () => {
+    const f = $rs.files[0]; if (!f) return;
+    try {
+      const b = JSON.parse(await f.text());
+      if (b?.app !== 'her-shadowing' || !b.localStorage) throw new Error('이 앱의 백업 파일이 아니에요.');
+      if (!confirm(`${new Date(b.exportedAt).toLocaleString('ko-KR')} 백업으로 복원할까요? 지금 기기의 학습 기록과 녹음은 백업 내용으로 바뀝니다.`)) return;
+      $bk.textContent = '복원 중…';
+      const keep = new Set(['her.apikey', 'her.dictcache', ...(b.localStorage['her.script'] ? [] : ['her.script'])]);
+      Object.keys(localStorage).filter((k) => k.startsWith('her.') && !keep.has(k)).forEach((k) => localStorage.removeItem(k));
+      Object.entries(b.localStorage).forEach(([k, v]) => localStorage.setItem(k, v));
+      await importRecordings(b.recordings || []);
+      $bk.textContent = '복원 완료. 앱을 다시 불러옵니다…';
+      setTimeout(() => location.reload(), 800);
+    } catch (e) {
+      $bk.textContent = '복원 실패: ' + e.message;
+    }
+  };
   document.getElementById('reset').onclick = () => {
     if (!confirm('진도·완료 장면·익힌 표현 기록을 지울까요? (대본은 유지)')) return;
     state.done.clear(); state.mastered.clear(); state.progress = null;
@@ -1297,8 +1498,8 @@ function updatePlayerUI(force = false) {
     set('dcount', `${player.index + 1} / ${player.cards.length}`);
     set('dko', c.kind === 'line' ? c.sp + (c.paren ? ` (${c.paren})` : '') : c.kind === 'cue' ? '🚗' : '지문');
     set('den', c.kind === 'cue' ? c.ko : c.text);
-    set('dnote', sc ? `${sceneTitle(sc)} · p.${sc.page}` : '');
-    set('dsrc', '');
+    set('dnote', sc ? `${sceneTitle(sc)} · p.${sc.page}${c.rate && c.kind === 'line' ? ` · ${c.rate}×` : ''}` : '');
+    set('dsrc', c.kind === 'line' && state.settings.showKo ? getKo(c.sceneId, c.itemIndex) || '' : '');
     const den = document.getElementById('den'); if (den) den.classList.toggle('line-text', c.kind !== 'cue');
     const m = document.getElementById('master'); if (m) m.hidden = true;
     const h = document.getElementById('hard'); if (h) h.hidden = true;
@@ -1318,8 +1519,9 @@ function updatePlayerUI(force = false) {
   }
   if (state.view === 'drill' && c) {
     const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-    const h = document.getElementById('hard'); if (h) h.hidden = true;
-    set('dcount', `${player.index + 1} / ${player.cards.length}`);
+    const h = document.getElementById('hard'); if (h) h.hidden = c.kind !== 'expr';
+    const srs = c.kind === 'expr' && exprSrs.get(c.id);
+    set('dcount', `${player.index + 1} / ${player.cards.length}${c.kind === 'expr' ? ' · ' + (srs ? boxLabel(srs.box) : '새 표현') : ''}`);
     set('dko', c.ko);
     const reveal = !state.settings.drillKoreanFirst || !/한국어|영어로/.test(player.status) || !player.playing;
     set('den', reveal ? c.en : '· · ·');
@@ -1332,13 +1534,15 @@ function updatePlayerUI(force = false) {
 
 // ---------- boot ----------
 async function boot() {
+  // Draw first so the app never opens on a blank screen; voices arrive later.
+  render();
   if ('speechSynthesis' in window) {
     await loadVoices();
     const d = defaultVoices();
     for (const k of Object.keys(d)) if (!state.settings.voices[k] || !englishVoices().concat(koreanVoices()).some((v) => v.name === state.settings.voices[k])) state.settings.voices[k] = d[k];
     saveSettings();
+    if (location.hash.startsWith('#/settings')) render(); // refresh the voice pickers
   }
-  render();
   if (state.script) { ensurePersistent(); deliver(track('open')); }
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     navigator.serviceWorker.register('sw.js').catch(() => {});

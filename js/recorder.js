@@ -43,6 +43,40 @@ export const listAll = async () =>
   (await tx('readonly', (s) => reqP(s.getAll()))).sort((a, b) => b.created - a.created);
 export const deleteRecording = (id) => tx('readwrite', (s) => reqP(s.delete(id)));
 
+// ---------- backup ----------
+const blobToB64 = (blob) => new Promise((resolve, reject) => {
+  const r = new FileReader();
+  r.onload = () => resolve(String(r.result).split(',')[1] || '');
+  r.onerror = () => reject(r.error);
+  r.readAsDataURL(blob);
+});
+const b64ToBlob = (b64, type) => {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type });
+};
+
+/** All recordings as JSON-safe objects (audio as base64). */
+export async function exportRecordings() {
+  const all = await listAll();
+  const out = [];
+  for (const r of all) {
+    const { blob, id, ...rest } = r;
+    out.push({ ...rest, audio: await blobToB64(blob) });
+  }
+  return out;
+}
+
+/** Replace all recordings with the given backup list. */
+export async function importRecordings(list) {
+  await tx('readwrite', (s) => reqP(s.clear()));
+  for (const r of list || []) {
+    const { audio, ...rest } = r;
+    await tx('readwrite', (s) => reqP(s.add({ ...rest, blob: b64ToBlob(audio, rest.mime || 'audio/webm') })));
+  }
+}
+
 // ---------- recording ----------
 export const canRecord = () => !!(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
 
