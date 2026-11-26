@@ -27,6 +27,16 @@ const state = {
 };
 const saveSettings = () => LS.set('settings', state.settings);
 
+// Ask the browser not to evict our data (script, progress) under storage pressure,
+// so the PDF only ever needs to be imported once per device.
+async function ensurePersistent() {
+  try {
+    if (!navigator.storage?.persist) return null;
+    if (await navigator.storage.persisted()) return true;
+    return await navigator.storage.persist();
+  } catch { return null; }
+}
+
 function hydrate() {
   if (!state.script) return;
   annotateScenes(state.script.scenes);
@@ -141,7 +151,9 @@ async function importFile(file, $status) {
     }
     state.script = script;
     LS.set('script', script);
+    if (LS.get('script', null) == null) throw new Error('기기에 저장하지 못했습니다. 시크릿 모드가 아닌지 확인하세요.');
     hydrate();
+    await ensurePersistent();
     $status.textContent = `완료: 장면 ${script.stats.scenes}개 · 대사 ${script.stats.dialogue}줄`;
     setTimeout(() => go('#/'), 700);
   } catch (e) {
@@ -154,7 +166,7 @@ function renderImport() {
     <section class="hero">
       <p class="eyebrow">Spike Jonze · <em>Her</em></p>
       <h2>영화 대본으로<br>출퇴근 쉐도잉</h2>
-      <p class="muted">가지고 있는 <b>Her.pdf</b> 대본을 불러오세요. 대본은 이 기기 안에서만 분석·저장되고 외부로 전송되지 않습니다.</p>
+      <p class="muted">가지고 있는 <b>Her.pdf</b> 대본을 <b>딱 한 번</b> 불러오세요. 이 기기 안에서만 분석·저장되고 외부로 전송되지 않으며, 다음부터는 묻지 않습니다.</p>
     </section>
     <label class="drop">
       <input type="file" id="file" accept=".pdf,.json,application/pdf,application/json" hidden>
@@ -402,7 +414,8 @@ function renderSettings() {
       <p class="muted small">기기에 설치된 음성을 씁니다. Android는 'Google 텍스트 음성 변환', iPhone은 설정 › 손쉬운 사용 › 음성 콘텐츠 › 음성에서 고품질(향상된) 영어 음성을 받으면 훨씬 자연스러워집니다.</p>
     </section>
     <section class="panel"><h3>데이터</h3>
-      ${state.script ? `<p class="muted small">불러온 대본: 장면 ${state.script.stats.scenes}개 · 대사 ${state.script.stats.dialogue}줄</p>` : ''}
+      ${state.script ? `<p class="muted small">불러온 대본: 장면 ${state.script.stats.scenes}개 · 대사 ${state.script.stats.dialogue}줄</p>
+      <p class="muted small" id="persist">저장 상태 확인 중…</p>` : ''}
       <div class="row wrap">
         ${state.script ? '<button class="ghost" id="export">대본 데이터 내보내기 (.json)</button>' : ''}
         <label class="ghost">다시 불러오기<input type="file" id="reimport" accept=".pdf,.json" hidden></label>
@@ -428,6 +441,12 @@ function renderSettings() {
     speak(SAMPLES[slot], { voiceName: s.voices[slot], rate: s.rate, lang: slot === 'korean' ? 'ko-KR' : 'en-US' });
   });
   const $st = document.getElementById('status');
+  const $persist = document.getElementById('persist');
+  if ($persist) ensurePersistent().then((ok) => {
+    $persist.textContent = ok ? '🔒 영구 저장 켜짐 — 브라우저가 대본을 자동으로 지우지 않습니다.'
+      : ok === false ? '⚠ 영구 저장이 허용되지 않았습니다. 홈 화면에 앱을 추가하면 대부분 허용됩니다.'
+      : '이 브라우저는 영구 저장 상태를 알려주지 않습니다.';
+  });
   document.getElementById('export')?.addEventListener('click', () => {
     const url = URL.createObjectURL(new Blob([JSON.stringify(state.script)], { type: 'application/json' }));
     const a = Object.assign(document.createElement('a'), { href: url, download: 'her-script.json' });
@@ -521,6 +540,7 @@ async function boot() {
     saveSettings();
   }
   render();
+  if (state.script) ensurePersistent();
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
