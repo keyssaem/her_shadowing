@@ -1,8 +1,8 @@
 // Offline cache: app shell (network-first so updates land) + pdf.js from CDN (cache-first).
-const CACHE = 'her-shadowing-v1';
+const CACHE = 'her-shadowing-v2';
 const SHELL = [
   './', 'index.html', 'css/style.css', 'manifest.webmanifest', 'icon.svg',
-  'js/app.js', 'js/parser.js', 'js/content.js', 'js/player.js', 'js/tts.js',
+  'js/app.js', 'js/parser.js', 'js/content.js', 'js/player.js', 'js/tts.js', 'js/dict.js',
 ];
 
 self.addEventListener('install', (e) => {

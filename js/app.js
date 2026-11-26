@@ -2,6 +2,7 @@ import { extractLines, parseScript } from './parser.js';
 import { ACTS, CATEGORIES, annotateScenes, linkExpressions } from './content.js';
 import { Player } from './player.js';
 import { loadVoices, englishVoices, koreanVoices, defaultVoices, speak, cancelSpeech, roleOf } from './tts.js';
+import { lookup, guessPos, myDict, keyOf, boxLabel } from './dict.js';
 
 // ---------- storage ----------
 const LS = {
@@ -53,7 +54,17 @@ const shuffle = (a) => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) {
 
 // ---------- player ----------
 const player = new Player({ getSettings: () => state.settings, onChange: () => updatePlayerUI() });
+// Word cards: listening to the end counts as a successful review;
+// pressing "previous" (replay) marks the card hard so it comes back.
+const hardMarked = new Set();
+player.onReplay = (card) => {
+  if (card?.kind === 'word') { hardMarked.add(card.id); myDict.review(card.id, 'hard'); }
+};
 player.onCardDone = (card) => {
+  if (card.kind === 'word') {
+    if (!hardMarked.delete(card.id)) myDict.review(card.id, 'good');
+    return;
+  }
   if (player.kind === 'scene' && card.sceneId) {
     state.progress = { sceneId: card.sceneId, index: player.index };
     LS.set('progress', state.progress);
@@ -102,6 +113,7 @@ function render() {
   if (route === 'expr') return renderExpressions(arg);
   if (route === 'settings') return renderSettings();
   if (route === 'drill') return renderDrill();
+  if (route === 'mydict') return renderMyDict();
   return renderHome();
 }
 
@@ -197,6 +209,11 @@ function renderHome() {
       <span class="card-title">${esc(sceneTitle(target))}</span>
       <span class="card-sub">${p ? `${startIndex + 1}번째 대사부터 · ` : ''}${modeLabel(state.settings.mode)} 모드로 바로 재생 ▶</span>
     </button>
+    <a class="card wide" href="#/mydict">
+      <span class="card-kicker">Drill Dictionary · 내 단어장</span>
+      <span class="card-title">${myDict.all().length ? `오늘 복습 ${myDict.due().length}개` : '대사 속 단어를 눌러 저장하세요'}</span>
+      <span class="card-sub">${myDict.all().length ? `저장 ${myDict.all().length}개 · 영영 뜻 → 대사 속에서 반복` : '영영사전 뜻과 함께 반복 학습'}</span>
+    </a>
     <div class="grid2">
       <button class="card" id="drill"><span class="card-kicker">표현 드라이브</span><span class="card-title">랜덤 15개</span><span class="card-sub">한국어 → 영어로 말하기</span></button>
       <a class="card" href="#/scenes"><span class="card-kicker">장면</span><span class="card-title">${keyDone}/${keyScenes.length}</span><span class="card-sub">핵심 장면 완료</span></a>
@@ -248,13 +265,49 @@ function renderScenes() {
 }
 
 // ---------- scene player ----------
-function highlight(text, sceneId) {
-  let html = esc(text);
+const TOKEN = /[A-Za-z0-9]+(?:'[A-Za-z]+)*|[^A-Za-z0-9]+/g;
+const isWord = (t) => /^[A-Za-z0-9]/.test(t);
+
+/** Tokenize a line into words (with char offsets). */
+function wordsOf(text) {
+  const out = [];
+  let m;
+  TOKEN.lastIndex = 0;
+  while ((m = TOKEN.exec(text))) if (isWord(m[0])) out.push({ w: m[0], start: m.index, end: m.index + m[0].length });
+  return out;
+}
+
+/** Expression spans of this scene that occur in the text. */
+function markRanges(text, sceneId) {
+  const lower = text.toLowerCase();
+  const ranges = [];
   for (const e of state.expressions) {
     if (e.source?.sceneId !== sceneId) continue;
-    const needle = esc(e.find || e.en).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    html = html.replace(new RegExp(needle, 'i'), (m) => `<mark title="${esc(e.ko)}">${m}</mark>`);
+    const needle = (e.find || e.en).toLowerCase();
+    const at = lower.indexOf(needle);
+    if (at >= 0) ranges.push({ start: at, end: at + needle.length, id: e.id });
   }
+  return ranges;
+}
+
+/** Line HTML: every word is a tappable span; curated expressions are highlighted. */
+function renderLine(text, sceneId) {
+  const ranges = markRanges(text, sceneId);
+  const saved = myDict.all().map((i) => i.id);
+  let html = '', open = null, wi = 0, m;
+  TOKEN.lastIndex = 0;
+  while ((m = TOKEN.exec(text))) {
+    const tok = m[0], start = m.index;
+    const r = ranges.find((x) => start >= x.start && start < x.end);
+    const markId = r && (isWord(tok) || start + tok.length <= r.end) ? r.id : null;
+    if (open && open !== markId) { html += '</mark>'; open = null; }
+    if (markId && !open) { html += `<mark data-e="${markId}">`; open = markId; }
+    if (isWord(tok)) {
+      const sv = saved.includes(keyOf(tok)) ? ' saved' : '';
+      html += `<span class="w${sv}" data-w="${wi++}">${esc(tok)}</span>`;
+    } else html += esc(tok);
+  }
+  if (open) html += '</mark>';
   return html;
 }
 
@@ -272,7 +325,7 @@ function renderScene(scene) {
     if (it.t === 'd') {
       return `<li class="line role-${roleOf(it.sp)}${it.text.length > 160 ? ' long' : ''}" data-item="${i}">
         <span class="sp">${esc(it.sp)}${it.paren ? ` <em>(${esc(it.paren)})</em>` : ''}</span>
-        <span class="tx">${highlight(it.text, scene.id)}</span></li>`;
+        <span class="tx">${renderLine(it.text, scene.id)}</span></li>`;
     }
     if (it.t === 'a') return `<li class="action" data-item="${i}">${esc(it.text)}</li>`;
     return `<li class="transition">${esc(it.text)}</li>`;
@@ -303,12 +356,217 @@ function renderScene(scene) {
   });
   const $role = document.getElementById('role');
   if ($role) $role.onchange = () => { s.myRole = $role.value; saveSettings(); };
-  $app.querySelectorAll('.lines [data-item]').forEach((li) => li.onclick = () => {
-    const idx = player.cards.findIndex((c) => c.itemIndex === +li.dataset.item);
-    if (idx >= 0) { player.jump(idx); if (!player.playing) player.play(); }
+  $app.querySelectorAll('.lines [data-item]').forEach((li) => li.onclick = (ev) => {
+    const w = ev.target.closest('.w');
+    if (w && li.classList.contains('line')) {
+      openWordSheet(scene, +li.dataset.item, +w.dataset.w, ev.target.closest('mark')?.dataset.e);
+      return;
+    }
+    playFromItem(+li.dataset.item);
   });
   bindBigBar();
   updatePlayerUI(true);
+}
+
+function playFromItem(itemIndex) {
+  const idx = player.cards.findIndex((c) => c.itemIndex === itemIndex);
+  if (idx >= 0) { player.jump(idx); if (!player.playing) player.play(); }
+}
+
+// ---------- word sheet (English-English dictionary) ----------
+let sheetSeq = 0;
+function closeSheet() {
+  document.getElementById('sheet-root')?.remove();
+}
+
+function openWordSheet(scene, itemIndex, wordIndex, exprId) {
+  closeSheet();
+  const item = scene.items[itemIndex];
+  const words = wordsOf(item.text);
+  const expr = exprId && state.expressions.find((e) => e.id === exprId);
+  let a = wordIndex, b = wordIndex;
+  let exprSpan = null; // [first, last] word index of the tapped curated expression
+  if (expr) {
+    const r = markRanges(item.text, scene.id).find((x) => x.id === exprId);
+    if (r) {
+      const inR = words.map((w, i) => (w.start >= r.start && w.start < r.end ? i : -1)).filter((i) => i >= 0);
+      if (inR.length) exprSpan = [inR[0], inR[inR.length - 1]];
+    }
+  }
+  const root = document.createElement('div');
+  root.id = 'sheet-root';
+  document.body.appendChild(root);
+  let result = null; // lookup result for current selection
+  let chosen = null; // { pos, d, ex }
+
+  const phrase = () => item.text.slice(words[a].start, words[b].end);
+  const curated = () => {
+    const k = keyOf(phrase());
+    const exact = state.expressions.find((e) => keyOf(e.find || e.en) === k);
+    if (exact) return exact;
+    // Only treat the selection as the curated expression when it covers it.
+    return exprSpan && a <= exprSpan[0] && b >= exprSpan[1] ? expr : null;
+  };
+  const onExpr = () => exprSpan && a === exprSpan[0] && b === exprSpan[1];
+
+  function draw(loading = false, error = '') {
+    const p = phrase();
+    const saved = myDict.has(p);
+    const cur = curated();
+    let defs = '';
+    if (loading) defs = '<p class="muted">사전 찾는 중…</p>';
+    else if (error) defs = `<p class="muted">${esc(error)}</p>`;
+    else if (!result) {
+      defs = `<p class="muted">영영사전에 "${esc(p)}" 항목이 없어요.${a !== b ? ' 표현 그대로 문맥과 함께 저장할 수 있고, 단어 하나를 눌러 뜻을 볼 수도 있어요.' : ''}</p>`;
+    } else {
+      defs = `<p class="hw"><b>${esc(result.headword)}</b> <span class="muted">${esc(result.phonetic)}</span></p>` +
+        result.meanings.slice(0, 4).map((m) => `
+          <div class="pos"><i>${esc(m.pos)}</i>
+            <ol>${m.defs.slice(0, 3).map((d, i) => {
+              const on = chosen && chosen.pos === m.pos && chosen.d === d.d;
+              return `<li class="def ${on ? 'on' : ''}" data-pos="${esc(m.pos)}" data-i="${i}">${esc(d.d)}${d.ex ? `<br><small>“${esc(d.ex)}”</small>` : ''}</li>`;
+            }).join('')}</ol></div>`).join('') +
+        '<p class="muted tiny">뜻을 누르면 그 뜻으로 저장돼요.</p>';
+    }
+    root.innerHTML = `
+      <div class="sheet-backdrop" data-x="close"></div>
+      <section class="sheet" role="dialog" aria-label="영영사전">
+        <div class="sheet-handle"></div>
+        <div class="sel-row">
+          <button class="icon-btn" data-x="left" ${a === 0 ? 'disabled' : ''} aria-label="앞 단어 포함">＋◀</button>
+          <b class="sel">${esc(p)}</b>
+          <button class="icon-btn" data-x="right" ${b === words.length - 1 ? 'disabled' : ''} aria-label="뒤 단어 포함">▶＋</button>
+        </div>
+        <div class="sel-tools">
+          <button class="chip" data-x="say">🔊 발음</button>
+          ${a !== b ? '<button class="chip" data-x="single">한 단어로</button>' : ''}
+          ${exprSpan && !onExpr() ? '<button class="chip on" data-x="expr">★ 핵심 표현 전체</button>' : ''}
+        </div>
+        ${cur ? `<div class="curated"><b>핵심 표현</b> ${esc(cur.ko)}${cur.note ? `<br><small>${esc(cur.note)}</small>` : ''}</div>`
+          : expr ? `<div class="curated"><b>이 단어가 속한 핵심 표현</b> ${esc(expr.en)} — ${esc(expr.ko)}</div>` : ''}
+        <div class="defs">${defs}</div>
+        <p class="ctx">“${esc(item.text)}” <span class="muted">— ${esc(item.sp)} · p.${item.page}</span></p>
+        <div class="sheet-actions">
+          <button class="card primary slim" data-x="add">${saved ? '✓ Drill Dictionary에 있음 (업데이트)' : '＋ Drill Dictionary에 추가'}</button>
+          <button class="ghost" data-x="play">▶ 이 대사부터 재생</button>
+        </div>
+        <p class="muted tiny">Definitions: Wiktionary (CC BY-SA) via dictionaryapi.dev</p>
+      </section>`;
+  }
+
+  async function refresh() {
+    const seq = ++sheetSeq;
+    result = null; chosen = null;
+    draw(true);
+    try {
+      const r = await lookup(phrase());
+      if (seq !== sheetSeq) return;
+      result = r;
+      if (r) {
+        const pos = guessPos(a > 0 ? words[a - 1].w : '', r.meanings);
+        const m = r.meanings.find((x) => x.pos === pos) || r.meanings[0];
+        chosen = m && m.defs[0] ? { pos: m.pos, d: m.defs[0].d, ex: m.defs[0].ex } : null;
+      }
+      draw();
+    } catch (e) {
+      if (seq === sheetSeq) draw(false, '사전을 불러오지 못했어요: ' + e.message);
+    }
+  }
+
+  root.addEventListener('click', (ev) => {
+    const def = ev.target.closest('.def');
+    if (def && result) {
+      const m = result.meanings.find((x) => x.pos === def.dataset.pos);
+      const d = m.defs[+def.dataset.i];
+      chosen = { pos: m.pos, d: d.d, ex: d.ex };
+      draw();
+      return;
+    }
+    const x = ev.target.closest('[data-x]')?.dataset.x;
+    if (!x) return;
+    if (x === 'close') closeSheet();
+    if (x === 'left' && a > 0) { a--; refresh(); }
+    if (x === 'right' && b < words.length - 1) { b++; refresh(); }
+    if (x === 'single') { a = b = wordIndex; refresh(); }
+    if (x === 'expr' && exprSpan) { [a, b] = exprSpan; refresh(); }
+    if (x === 'say') { player.pause(); cancelSpeech(); speak(phrase(), { voiceName: state.settings.voices.samantha, rate: state.settings.rate }); }
+    if (x === 'play') { closeSheet(); playFromItem(itemIndex); }
+    if (x === 'add') {
+      const cur = curated();
+      myDict.add({
+        text: phrase(),
+        headword: result?.headword || '',
+        phonetic: result?.phonetic || '',
+        pos: chosen?.pos || '',
+        def: chosen?.d || '',
+        ex: chosen?.ex || '',
+        ko: cur?.ko || '',
+        ctx: { sp: item.sp, text: item.text, sceneId: scene.id, itemIndex, page: item.page },
+      });
+      draw();
+      toast(`"${phrase()}" 저장 · 오늘 복습 ${myDict.due().length}개`);
+      // refresh saved underline in the script
+      $app.querySelectorAll(`.lines [data-item="${itemIndex}"] .tx`).forEach((el) => { el.innerHTML = renderLine(item.text, scene.id); });
+    }
+  });
+  refresh();
+}
+
+function toast(msg) {
+  document.getElementById('toast')?.remove();
+  const t = Object.assign(document.createElement('div'), { id: 'toast', className: 'toast', textContent: msg });
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 2200);
+}
+
+// ---------- Drill Dictionary ----------
+function wordCard(i) {
+  return { kind: 'word', id: i.id, text: i.text, pos: i.pos, def: i.def, ko: i.ko, phonetic: i.phonetic, ctx: i.ctx };
+}
+
+function startWordDrill(list, title) {
+  if (!list.length) return toast('복습할 단어가 없어요.');
+  player.load({ cards: list.map(wordCard), index: 0, title, kind: 'drill' });
+  player.sceneId = null;
+  player.play();
+  go('#/drill');
+}
+
+function renderMyDict() {
+  const all = myDict.all();
+  const due = myDict.due();
+  shell('Drill Dictionary', `
+    <p class="muted small">대본에서 단어나 표현을 누르면 영영 뜻을 보고 여기에 저장할 수 있어요. 운전 중에는 <b>끝까지 들으면 '복습 완료'</b>, <b>이전 곡 버튼을 누르면 '어려움'</b>으로 기록돼 다시 나옵니다.</p>
+    <div class="grid2">
+      <button class="card primary" id="dueBtn"><span class="card-kicker">오늘 복습</span><span class="card-title">${due.length}개</span><span class="card-sub">▶ 드라이브 시작</span></button>
+      <button class="card" id="allBtn"><span class="card-kicker">전체 반복</span><span class="card-title">${all.length}개</span><span class="card-sub">▶ 랜덤 순서</span></button>
+    </div>
+    ${all.length ? '' : '<p class="muted empty">아직 저장한 단어가 없어요. 장면을 열고 대사 속 단어를 눌러보세요.</p>'}
+    <ul class="expr-list">${all.map((i) => `
+      <li>
+        <div class="ex-main">
+          <b>${esc(i.text)} <span class="box">${boxLabel(i.box)}${i.due <= Date.now() ? ' · 복습' : ''}</span></b>
+          ${i.def ? `<span class="en-def"><i>${esc(i.pos)}</i> ${esc(i.def)}</span>` : ''}
+          ${i.ko ? `<span>${esc(i.ko)}</span>` : ''}
+          ${i.ctx ? `<a class="src" href="#/scene/${i.ctx.sceneId}">“${esc(i.ctx.text.slice(0, 90))}${i.ctx.text.length > 90 ? '…' : ''}” — ${esc(i.ctx.sp)} · p.${i.ctx.page}</a>` : ''}
+        </div>
+        <div class="ex-actions">
+          <button class="icon-btn" data-say="${esc(i.id)}" aria-label="듣기">▶</button>
+          <button class="icon-btn" data-del="${esc(i.id)}" aria-label="삭제">✕</button>
+        </div>
+      </li>`).join('')}</ul>`, { back: '#/' });
+  document.getElementById('dueBtn').onclick = () => startWordDrill(due, 'Drill Dictionary · 오늘 복습');
+  document.getElementById('allBtn').onclick = () => startWordDrill(shuffle(all), 'Drill Dictionary · 전체');
+  $app.querySelectorAll('[data-say]').forEach((b) => b.onclick = () => {
+    const i = all.find((x) => x.id === b.dataset.say);
+    player.pause(); cancelSpeech();
+    speak(i.text + '. ' + (i.def || ''), { voiceName: state.settings.voices.samantha, rate: state.settings.rate });
+  });
+  $app.querySelectorAll('[data-del]').forEach((b) => b.onclick = () => {
+    if (!confirm('이 단어를 Drill Dictionary에서 뺄까요?')) return;
+    myDict.remove(b.dataset.del);
+    renderMyDict();
+  });
 }
 
 // ---------- drill ----------
@@ -327,14 +585,32 @@ function renderDrill() {
       <p class="drill-en" id="den"></p>
       <p class="drill-note" id="dnote"></p>
       <p class="drill-src" id="dsrc"></p>
-      <button class="ghost" id="master"></button>
+      <div class="row center">
+        <button class="ghost" id="hard" hidden>어려워요 ↺</button>
+        <button class="ghost" id="master"></button>
+      </div>
     </main>
     ${bigBar()}`;
   document.getElementById('master').onclick = () => {
     const c = player.current; if (!c) return;
+    if (c.kind === 'word') {
+      hardMarked.delete(c.id);
+      myDict.review(c.id, 'easy');
+      hardMarked.add(c.id); // already graded; skip auto-grade at card end
+      toast(`"${c.text}" — 다음 복습: ${boxLabel(myDict.get(c.text)?.box)} 뒤`);
+      player.next();
+      return;
+    }
     state.mastered.has(c.id) ? state.mastered.delete(c.id) : state.mastered.add(c.id);
     LS.set('mastered', [...state.mastered]);
     updatePlayerUI(true);
+  };
+  document.getElementById('hard').onclick = () => {
+    const c = player.current; if (c?.kind !== 'word') return;
+    myDict.review(c.id, 'hard');
+    hardMarked.add(c.id);
+    toast(`"${c.text}" — 오늘 다시 나와요`);
+    player.next();
   };
   bindBigBar();
   updatePlayerUI(true);
@@ -359,6 +635,7 @@ function renderExpressions(catArg) {
         </div>
         <div class="ex-actions">
           <button class="icon-btn" data-say="${e.id}" aria-label="듣기">▶</button>
+          <button class="icon-btn ${myDict.has(e.en) ? 'on' : ''}" data-add="${e.id}" aria-label="Drill Dictionary에 추가">＋</button>
           <button class="icon-btn ${state.mastered.has(e.id) ? 'on' : ''}" data-master="${e.id}" aria-label="익힘">✓</button>
         </div>
       </li>`).join('')}</ul>`, { back: '#/' });
@@ -370,6 +647,16 @@ function renderExpressions(catArg) {
     const e = state.expressions.find((x) => x.id === b.dataset.say);
     player.pause(); cancelSpeech();
     speak(e.source?.text || e.en, { voiceName: state.settings.voices[roleOf(e.source?.sp)], rate: state.settings.rate });
+  });
+  $app.querySelectorAll('[data-add]').forEach((b) => b.onclick = () => {
+    const e = state.expressions.find((x) => x.id === b.dataset.add);
+    const sc = e.source && sceneById(e.source.sceneId);
+    myDict.add({
+      text: e.en, pos: '', def: e.note || '', ko: e.ko,
+      ctx: e.source ? { sp: e.source.sp, text: e.source.text, sceneId: e.source.sceneId, itemIndex: e.source.index, page: sc?.page ?? e.source.page } : null,
+    });
+    b.classList.add('on');
+    toast(`"${e.en}" Drill Dictionary에 저장`);
   });
   $app.querySelectorAll('[data-master]').forEach((b) => b.onclick = () => {
     const id = b.dataset.master;
@@ -518,8 +805,20 @@ function updatePlayerUI(force = false) {
     const li = $app.querySelector('.lines .active');
     if (li) li.classList.toggle('my-turn', /내 차례/.test(player.status));
   }
+  if (state.view === 'drill' && c && c.kind === 'word') {
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    set('dcount', `${player.index + 1} / ${player.cards.length} · ${boxLabel(myDict.get(c.text)?.box)}`);
+    set('dko', c.def ? `${c.pos ? '(' + c.pos + ') ' : ''}${c.def}` : '');
+    set('den', c.text);
+    set('dnote', [c.phonetic, c.ko].filter(Boolean).join(' · '));
+    set('dsrc', c.ctx ? `${c.ctx.sp} · p.${c.ctx.page} — “${c.ctx.text}”` : '');
+    const m = document.getElementById('master'); if (m) { m.textContent = '쉬워요 ✓'; m.classList.remove('on'); }
+    const h = document.getElementById('hard'); if (h) h.hidden = false;
+    return;
+  }
   if (state.view === 'drill' && c) {
     const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    const h = document.getElementById('hard'); if (h) h.hidden = true;
     set('dcount', `${player.index + 1} / ${player.cards.length}`);
     set('dko', c.ko);
     const reveal = !state.settings.drillKoreanFirst || !/한국어|영어로/.test(player.status) || !player.playing;

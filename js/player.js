@@ -85,7 +85,7 @@ export class Player {
       const c = this.current;
       try {
         navigator.mediaSession.metadata = new MediaMetadata({
-          title: (c.sp ? c.sp + ': ' : '') + (c.text || c.en || '').slice(0, 80),
+          title: (c.kind !== 'word' && c.sp ? c.sp + ': ' : '') + (c.text || c.en || '').slice(0, 80),
           artist: this.title,
           album: 'Her Shadowing',
         });
@@ -150,7 +150,7 @@ export class Player {
   }
   next() { this.jump(this.index + 1); }
   prev() { this.jump(this.index - 1); }
-  replay() { this.jump(this.index); }
+  replay() { this.onReplay?.(this.current); this.jump(this.index); }
 
   async sleep(ms, token) {
     const end = Date.now() + ms;
@@ -225,6 +225,33 @@ export class Player {
         steps.push({ type: 'speak', text: speakable(card.source.text), ...voiceFor(card.source.sp), label: '원래 대사' });
         steps.push({ type: 'wait', ms: 700 });
       }
+      return steps;
+    }
+
+    if (card.kind === 'word') {
+      // word → (repeat) → English definition → Korean note → context chunk to shadow → word
+      const wordVoice = { voiceName: s.voices.samantha, rate, pitch: 1 };
+      for (let r = 0; r < s.repeat; r++) {
+        steps.push({ type: 'speak', text: card.text, ...wordVoice, label: '단어' });
+        steps.push({ type: 'wait', ms: gapMs(card.text), label: '따라 말하기' });
+      }
+      if (card.def) {
+        steps.push({ type: 'speak', text: (card.pos ? card.pos + '. ' : '') + card.def, voiceName: s.voices.narrator, rate, label: '영영 뜻' });
+        steps.push({ type: 'wait', ms: 500 });
+      }
+      if (card.ko) {
+        steps.push({ type: 'speak', text: card.ko, voiceName: s.voices.korean, lang: 'ko-KR', rate: 1, label: '한국어' });
+        steps.push({ type: 'wait', ms: 400 });
+      }
+      if (card.ctx?.text) {
+        const chunks = chunkLine(card.ctx.text);
+        const lc = card.text.toLowerCase();
+        const chunk = chunks.find((c) => c.toLowerCase().includes(lc)) || chunks[0];
+        steps.push({ type: 'speak', text: speakable(chunk), ...voiceFor(card.ctx.sp), label: '대사 속에서' });
+        steps.push({ type: 'wait', ms: gapMs(chunk), label: '대사 따라 말하기' });
+      }
+      steps.push({ type: 'speak', text: card.text, ...wordVoice, label: '단어' });
+      steps.push({ type: 'wait', ms: 600 });
       return steps;
     }
 
