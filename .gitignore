@@ -1,0 +1,4 @@
+*.pdf
+_test/
+her-script.json
+.claude/settings.local.json

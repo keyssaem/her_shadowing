@@ -1,0 +1,14 @@
+{
+  "name": "Her Shadowing",
+  "short_name": "Her",
+  "description": "영화 Her 대본으로 하는 출퇴근 영어 쉐도잉",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#1b1311",
+  "theme_color": "#1b1311",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
