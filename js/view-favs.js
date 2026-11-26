@@ -1,15 +1,15 @@
 // "내 명대사": favourite lines starred in the script, as a playable list.
 import { roleOf } from './tts.js';
 import { state, $app, esc, sceneTitle, player, favLines, favCard, toggleFav } from './core.js';
-import { shell, go, toast } from './ui.js';
+import { shell, go, toast, reviewTabs } from './ui.js';
 
 export function renderFavs() {
   const list = favLines();
-  shell('⭐ 내 명대사', `
-    <p class="muted small">장면 화면에서 대사 옆 ☆를 누르면 여기에 모여요. 오늘의 드라이브 마지막에도 2~3줄씩 나옵니다.</p>
+  shell('복습', `${reviewTabs('favs')}
+    <p class="muted small">대본에서 대사를 누르고 ☆ 명대사를 고르면 여기에 모여요. 🚗 출발 코스 마지막에도 2~3줄씩 나옵니다.</p>
     ${list.length ? `
       <div class="grid2">
-        <button class="card primary" id="playAll"><span class="card-kicker">${list.length}줄</span><span class="card-title">▶ 전체 재생</span><span class="card-sub">${state.settings.mode === 'listen' ? '듣기' : '쉐도잉'} 모드</span></button>
+        <button class="card primary" id="playAll"><span class="card-kicker">${list.length}줄</span><span class="card-title">▶ 전체 재생</span><span class="card-sub">${state.settings.mode === 'listen' ? '듣기' : '따라 말하기'} 모드</span></button>
         <button class="card" id="shuffleAll"><span class="card-kicker">무작위</span><span class="card-title">🔀 섞어서</span><span class="card-sub">순서 없이 반복</span></button>
       </div>
       <ul class="fav-list">${list.map((f, i) => `
@@ -24,7 +24,7 @@ export function renderFavs() {
             <button class="icon-btn on" data-unfav="${i}" aria-label="명대사에서 빼기">★</button>
           </div>
         </li>`).join('')}</ul>`
-      : '<p class="muted empty">아직 명대사가 없어요. 장면을 열고 마음에 드는 대사 옆 ☆를 눌러보세요.</p>'}`, { back: '#/' });
+      : '<p class="muted empty">아직 명대사가 없어요. 📖 대본에서 마음에 드는 대사를 누르고 ☆ 명대사를 골라보세요.</p>'}`, { back: '#/' });
 
   const start = (cards, index, title) => {
     player.load({ cards, index, title, kind: 'drill' });

@@ -406,6 +406,70 @@ mark { background: color-mix(in srgb, var(--accent2) 30%, transparent); color: i
 .composer .row { gap: 8px; }
 .composer .row .card { margin: 0; flex: 1; }
 
+/* ===== Intuitive UI pass ===== */
+/* bottom tab bar */
+.tabbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 7;
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  padding: 6px 8px calc(6px + var(--safe-b));
+  background: color-mix(in srgb, var(--bg2) 96%, transparent); backdrop-filter: blur(12px);
+  border-top: 1px solid var(--line);
+}
+.tabbar a { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 0; border-radius: 12px; color: var(--muted); max-width: 180px; margin: 0 auto; width: 100%; }
+.tabbar .ti { font-size: 22px; line-height: 1; filter: grayscale(.6); opacity: .75; }
+.tabbar .tl { font-size: 12px; font-weight: 600; }
+.tabbar a.on { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.tabbar a.on .ti { filter: none; opacity: 1; }
+.content.with-tabs { padding-bottom: calc(170px + var(--safe-b)); }
+.mini { bottom: calc(76px + var(--safe-b)); }
+
+/* review hub */
+.segmented { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 4px; border-radius: 14px; background: var(--bg2); margin-bottom: 10px; }
+.segmented a { text-align: center; padding: 10px 4px; border-radius: 10px; font-size: 14px; font-weight: 600; color: var(--muted); }
+.segmented a.on { background: var(--card); color: var(--text); box-shadow: 0 1px 3px #0003; }
+.practice-link { display: flex; align-items: center; gap: 12px; padding: 12px 14px; margin-bottom: 14px; border-radius: 14px; border: 1px solid var(--line); background: var(--card); }
+.practice-link > span:first-child { font-size: 22px; }
+.practice-link > span:nth-child(2) { flex: 1; }
+.practice-link small { display: block; color: var(--muted); font-size: 12px; }
+.practice-link > span:last-child { font-size: 22px; color: var(--muted); }
+.sec-title { margin: 18px 4px 8px; font-size: 13px; font-weight: 700; color: var(--muted); }
+.card-title.small { font-size: 17px; }
+
+/* player bar: now-doing line, countdown, labelled buttons */
+.now { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; min-height: 30px; }
+.now-text { flex: 1; font-size: 17px; font-weight: 700; color: var(--text); }
+.now-text.speak { color: var(--ok); font-size: 19px; }
+.now-pos { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.countdown { height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; margin-bottom: 8px; }
+.countdown i { display: block; height: 100%; width: 100%; background: var(--ok); border-radius: 4px; }
+.bar-controls { grid-template-columns: 1fr 1fr 1.5fr 1fr; }
+.ctl { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; height: 66px; }
+.ctl .ci { font-size: 22px; line-height: 1; }
+.ctl .cl { font-size: 12px; font-weight: 600; color: var(--muted); }
+.ctl.play .ci { font-size: 26px; }
+.ctl.play .cl { color: #ffe9e2; }
+.bar-status { display: none; }
+
+/* grading buttons: same two everywhere */
+.grade { min-width: 140px; padding: 14px 18px; border-radius: 14px; font-size: 16px; font-weight: 700; border: 2px solid var(--line); background: var(--card); }
+.grade.know { border-color: var(--ok); color: var(--ok); }
+.grade.again { border-color: var(--accent2); color: var(--accent2); }
+
+/* script lines: tap for a menu, long-press words for meanings */
+.line { padding-right: 12px; }
+.line .tx { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+.line .w.pressing { background: color-mix(in srgb, var(--accent2) 40%, transparent); transition: background .45s; }
+.line.selected { background: var(--card); border-left-color: var(--accent2); }
+.fav-mark { position: absolute; right: 10px; top: 8px; color: var(--accent2); font-size: 15px; }
+.line-actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 10px; }
+.line-actions button {
+  display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 10px 2px;
+  border-radius: 12px; border: 1px solid var(--line); background: var(--bg2); font-size: 12px; font-weight: 600;
+}
+.line-actions button span { font-size: 20px; line-height: 1; }
+.line-actions button.on { border-color: var(--accent2); color: var(--accent2); }
+.la-hint { grid-column: 1 / -1; margin: 2px 0 0; font-size: 12px; color: var(--muted); text-align: center; }
+
 /* departure screen */
 .go {
   min-height: 100dvh; display: flex; flex-direction: column; justify-content: center; gap: 10px;

@@ -95,8 +95,7 @@ export function renderScene(scene) {
         <span class="sp">${esc(it.sp)}${it.paren ? ` <em>(${esc(it.paren)})</em>` : ''}</span>
         <span class="tx">${renderLine(it.text, scene.id)}</span>
         ${s.showKo && getKo(scene.id, i) ? `<span class="ko">${esc(getKo(scene.id, i))}</span>` : ''}
-        <button class="fav ${isFav(scene.id, i) ? 'on' : ''}" data-fav aria-label="명대사">${isFav(scene.id, i) ? '★' : '☆'}</button>
-        <button class="mic" data-practice aria-label="말하기 연습">🎙</button></li>`;
+        ${isFav(scene.id, i) ? '<span class="fav-mark" aria-label="명대사">★</span>' : ''}</li>`;
     }
     if (it.t === 'a') return `<li class="action" data-item="${i}">${esc(it.text)}</li>`;
     return `<li class="transition">${esc(it.text)}</li>`;
@@ -152,25 +151,91 @@ export function renderScene(scene) {
     const first = scene.items.findIndex((it) => it.t === 'd');
     openPracticeSheet(scene, cur != null && scene.items[cur]?.t === 'd' ? cur : first, { mode: 'dictation' });
   };
-  $app.querySelectorAll('.lines [data-item]').forEach((li) => li.onclick = (ev) => {
-    if (ev.target.closest('[data-practice]')) return openPracticeSheet(scene, +li.dataset.item);
-    const favBtn = ev.target.closest('[data-fav]');
-    if (favBtn) {
-      const on = toggleFav(scene.id, +li.dataset.item);
-      favBtn.textContent = on ? '★' : '☆';
-      favBtn.classList.toggle('on', on);
-      toast(on ? '⭐ 내 명대사에 추가 · 드라이브 마지막에 나와요' : '명대사에서 뺐어요');
-      return;
-    }
-    const w = ev.target.closest('.w');
-    if (w && li.classList.contains('line')) {
-      openWordSheet(scene, +li.dataset.item, +w.dataset.w, ev.target.closest('mark')?.dataset.e);
-      return;
-    }
-    playFromItem(+li.dataset.item);
-  });
+  bindLineInteractions(scene);
   bindBigBar();
   updatePlayerUI(true);
+  if (!LS.get('hint.line', false)) {
+    LS.set('hint.line', true);
+    toast('대사를 누르면 메뉴가 열려요 · 단어를 길게 누르면 뜻이 나와요', '💡');
+  }
+}
+
+// ---------- line interactions ----------
+// Tap a line → an action row opens under it (play from here / speak / dictation / favourite).
+// Long-press a word → English dictionary. Nothing is hidden behind tiny icons.
+function actionRow(scene, i) {
+  const fav = isFav(scene.id, i);
+  return `<div class="line-actions" role="toolbar" aria-label="대사 메뉴">
+      <button data-act="play"><span>▶</span>여기부터</button>
+      <button data-act="speak"><span>🎙</span>말하기 연습</button>
+      <button data-act="dict"><span>✍</span>받아쓰기</button>
+      <button data-act="fav" class="${fav ? 'on' : ''}"><span>${fav ? '★' : '☆'}</span>${fav ? '명대사 빼기' : '명대사'}</button>
+      <p class="la-hint">📖 단어 뜻은 단어를 <b>길게 누르세요</b></p>
+    </div>`;
+}
+
+function bindLineInteractions(scene) {
+  const list = $app.querySelector('.lines');
+  let pressTimer = 0, longPressed = false, startXY = null;
+
+  const cancelPress = () => { clearTimeout(pressTimer); pressTimer = 0; };
+  list.addEventListener('pointerdown', (ev) => {
+    const w = ev.target.closest('.w');
+    const li = ev.target.closest('.line');
+    longPressed = false;
+    if (!w || !li || ev.target.closest('.line-actions')) return;
+    startXY = [ev.clientX, ev.clientY];
+    w.classList.add('pressing');
+    pressTimer = setTimeout(() => {
+      longPressed = true;
+      w.classList.remove('pressing');
+      if (navigator.vibrate) navigator.vibrate(15);
+      openWordSheet(scene, +li.dataset.item, +w.dataset.w, w.closest('mark')?.dataset.e);
+    }, 450);
+  });
+  list.addEventListener('pointermove', (ev) => {
+    if (pressTimer && startXY && Math.hypot(ev.clientX - startXY[0], ev.clientY - startXY[1]) > 10) {
+      cancelPress();
+      list.querySelectorAll('.pressing').forEach((x) => x.classList.remove('pressing'));
+    }
+  });
+  const end = () => { cancelPress(); list.querySelectorAll('.pressing').forEach((x) => x.classList.remove('pressing')); };
+  list.addEventListener('pointerup', end);
+  list.addEventListener('pointercancel', end);
+  list.addEventListener('contextmenu', (ev) => { if (ev.target.closest('.w')) ev.preventDefault(); });
+
+  list.addEventListener('click', (ev) => {
+    if (longPressed) { longPressed = false; ev.preventDefault(); return; }
+    const li = ev.target.closest('[data-item]');
+    if (!li) return;
+    const i = +li.dataset.item;
+    const act = ev.target.closest('[data-act]')?.dataset.act;
+    if (act) {
+      if (act === 'play') { closeRows(); playFromItem(i); }
+      if (act === 'speak') openPracticeSheet(scene, i);
+      if (act === 'dict') openPracticeSheet(scene, i, { mode: 'dictation' });
+      if (act === 'fav') {
+        const on = toggleFav(scene.id, i);
+        toast(on ? '⭐ 명대사에 추가 · 출발 코스 마지막에 나와요' : '명대사에서 뺐어요');
+        li.querySelector('.fav-mark')?.remove();
+        if (on) li.querySelector('.tx').insertAdjacentHTML('afterend', '<span class="fav-mark" aria-label="명대사">★</span>');
+        li.querySelector('.line-actions').outerHTML = actionRow(scene, i);
+      }
+      return;
+    }
+    if (!li.classList.contains('line')) return playFromItem(i); // scene description lines just play
+    // Toggle this line's action row.
+    const open = li.classList.contains('selected');
+    closeRows();
+    if (!open) {
+      li.classList.add('selected');
+      li.insertAdjacentHTML('beforeend', actionRow(scene, i));
+    }
+  });
+  function closeRows() {
+    list.querySelectorAll('.line.selected').forEach((x) => x.classList.remove('selected'));
+    list.querySelectorAll('.line-actions').forEach((x) => x.remove());
+  }
 }
 
 export function playFromItem(itemIndex) {
@@ -248,7 +313,7 @@ export function openWordSheet(scene, itemIndex, wordIndex, exprId) {
         <div class="defs">${defs}</div>
         <p class="ctx">“${esc(item.text)}” <span class="muted">— ${esc(item.sp)} · p.${item.page}</span></p>
         <div class="sheet-actions">
-          <button class="card primary slim" data-x="add">${saved ? '✓ Drill Dictionary에 있음 (업데이트)' : '＋ Drill Dictionary에 추가'}</button>
+          <button class="card primary slim" data-x="add">${saved ? '✓ 내 단어장에 있음 (뜻 업데이트)' : '＋ 내 단어장에 추가'}</button>
           <button class="ghost" data-x="play">▶ 이 대사부터 재생</button>
         </div>
         <p class="muted tiny">Definitions: Wiktionary (CC BY-SA) via dictionaryapi.dev</p>
@@ -396,7 +461,7 @@ export function openPracticeSheet(scene, itemIndex, opts = {}) {
         <p class="target">${target}</p>
         ${result ? `<div class="score-box"><b class="score ${result.score >= 90 ? 'hi' : result.score >= 70 ? 'mid' : 'lo'}">${result.score}</b>
           <span><small>들린 문장</small><br>“${esc(result.heard)}”</span></div>
-          ${result.words.some((w) => !w.ok) ? `<button class="ghost hl block" data-x="missed" ${busy ? 'disabled' : ''}>＋ 놓친 단어 ${new Set(result.words.filter((w) => !w.ok).map((w) => keyOf(w.text))).size}개 → Drill Dictionary</button>` : ''}` : ''}
+          ${result.words.some((w) => !w.ok) ? `<button class="ghost hl block" data-x="missed" ${busy ? 'disabled' : ''}>＋ 놓친 단어 ${new Set(result.words.filter((w) => !w.ok).map((w) => keyOf(w.text))).size}개 → 내 단어장에 추가</button>` : ''}` : ''}
         ${note ? `<p class="status">${esc(note)}</p>` : ''}
         <div class="pr-row">
           <button class="pr-btn" data-x="orig" ${busy ? 'disabled' : ''}>▶<small>원문</small></button>
@@ -508,7 +573,7 @@ export function openPracticeSheet(scene, itemIndex, opts = {}) {
         if (isNew) added++;
       }
       busy = '';
-      draw(`${missed.length}개를 Drill Dictionary에 넣었어요${added < missed.length ? ` (새 단어 ${added}개)` : ''}. 운전 중 복습에 나와요.`);
+      draw(`${missed.length}개를 내 단어장에 넣었어요${added < missed.length ? ` (새 단어 ${added}개)` : ''}. 운전 중 복습에 나와요.`);
       if (added) deliver(track('saved', { count: myDict.all().length }));
       $app.querySelectorAll(`.lines [data-item="${itemIndex}"] .tx`).forEach((el) => { el.innerHTML = renderLine(item.text, scene.id); });
       return;

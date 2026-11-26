@@ -213,7 +213,7 @@ export function planDrive(minutes) {
   let startIdx = state.progress && order[si]?.id === state.progress.sceneId ? state.progress.index : 0;
   const firstScene = order[si];
 
-  push(cue(`오늘의 드라이브 ${minutes}분. ${words.length ? `단어 복습 ${words.length}개, ` : ''}핵심 표현 세 개, 그리고 ${sceneTitle(firstScene)} 장면을 이어서 할게요.`));
+  push(cue(`${minutes}분 코스 출발. ${words.length ? `단어 복습 ${words.length}개, ` : ''}핵심 표현 세 개, 그리고 ${sceneTitle(firstScene)} 장면을 이어서 할게요.`));
   if (words.length) { push(cue('먼저 단어 복습.')); words.forEach(push); }
   push(cue('핵심 표현 세 개.'));
   exprs.forEach(push);

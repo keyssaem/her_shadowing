@@ -4,7 +4,7 @@
 //   (stale-while-revalidate).
 // - Libraries from CDNs (pdf.js, Claude SDK): cache-first; their URLs are versioned.
 // - Everything else (APIs) goes straight to the network.
-const CACHE = 'her-shadowing-v7';
+const CACHE = 'her-shadowing-v8';
 const SHELL = [
   './', 'index.html', 'css/style.css', 'manifest.webmanifest', 'icon.svg',
   'js/app.js', 'js/core.js', 'js/ui.js', 'js/view-home.js', 'js/view-scene.js', 'js/view-study.js',

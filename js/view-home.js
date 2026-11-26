@@ -19,7 +19,7 @@ export function renderGo() {
   $app.innerHTML = `
     <main class="go">
       <a class="go-home" href="#/" aria-label="홈으로">✕</a>
-      <p class="go-kicker">🚗 오늘의 드라이브</p>
+      <p class="go-kicker">🚗 출발</p>
       <p class="go-plan">${due ? `단어 ${due}개 → ` : ''}표현 3개 → ${esc(sceneTitle(next))}</p>
       <p class="go-stat">🔥 ${streak()}일 연속 · 오늘 ${Math.floor(d.ms / 60000)}/${state.settings.dailyGoal}분</p>
       <div class="go-btns">
@@ -33,7 +33,7 @@ export function renderGo() {
 
 export function startDrive(minutes) {
   const plan = planDrive(minutes);
-  player.load({ cards: plan.cards, index: 0, title: `🚗 오늘의 드라이브 · ${minutes}분`, kind: 'drive' });
+  player.load({ cards: plan.cards, index: 0, title: `🚗 출발 · ${minutes}분 코스`, kind: 'drive' });
   player.sceneId = null;
   player.play();
   go('#/drill');
@@ -86,7 +86,7 @@ export function renderImport() {
   shell('', `
     <section class="hero">
       <p class="eyebrow">Spike Jonze · <em>Her</em></p>
-      <h2>영화 대본으로<br>출퇴근 쉐도잉</h2>
+      <h2>영화 대본으로<br>출퇴근 따라 말하기</h2>
       <p class="muted">가지고 있는 <b>Her.pdf</b> 대본을 <b>딱 한 번</b> 불러오세요. 이 기기 안에서만 분석·저장되고 외부로 전송되지 않으며, 다음부터는 묻지 않습니다.</p>
     </section>
     <label class="drop">
@@ -115,30 +115,25 @@ export function renderHome() {
     </section>
     <a class="strip" id="homeStrip" href="#/stats"></a>
     <section class="drive-card">
-      <span class="card-kicker">🚗 오늘의 드라이브 · 출발 전에 한 번만</span>
-      <span class="drive-sub">${myDict.due().length ? `단어 복습 ${myDict.due().length}개 → ` : ''}핵심 표현 3개 → "${esc(sceneTitle(target))}" 이어서</span>
+      <span class="card-kicker">🚗 출발 · 버튼 한 번이면 끝까지 자동 재생</span>
+      <span class="drive-sub">${myDict.due().length ? `단어 복습 ${myDict.due().length}개 → ` : ''}핵심 표현 3개 → "${esc(sceneTitle(target))}" 이어서${favLines().length ? ' → 명대사' : ''}</span>
       <div class="drive-btns">
-        <button class="drive-btn" data-drive="15"><b>15</b>분</button>
-        <button class="drive-btn" data-drive="30"><b>30</b>분</button>
+        <button class="drive-btn" data-drive="15"><b>15</b>분 출발</button>
+        <button class="drive-btn" data-drive="30"><b>30</b>분 출발</button>
       </div>
     </section>
-    <button class="card" id="continue">
-      <span class="card-kicker">${p ? '이어서' : '시작'} · ${ACTS[target.act - 1].ko} · p.${target.page}</span>
-      <span class="card-title">${esc(sceneTitle(target))}</span>
-      <span class="card-sub">${p ? `${startIndex + 1}번째 대사부터 · ` : ''}${modeLabel(state.settings.mode)} 모드로 바로 재생 ▶</span>
-    </button>
-    <a class="card wide" href="#/mydict">
-      <span class="card-kicker">Drill Dictionary · 내 단어장</span>
-      <span class="card-title">${myDict.all().length ? `오늘 복습 ${myDict.due().length}개` : '대사 속 단어를 눌러 저장하세요'}</span>
-      <span class="card-sub">${myDict.all().length ? `저장 ${myDict.all().length}개 · 영영 뜻 → 대사 속에서 반복` : '영영사전 뜻과 함께 반복 학습'}</span>
-    </a>
+    <p class="sec-title">따로 하고 싶을 때</p>
     <div class="grid2">
-      <button class="card" id="drill"><span class="card-kicker">표현 드라이브</span><span class="card-title">랜덤 15개</span><span class="card-sub">한국어 → 영어로 말하기</span></button>
-      <a class="card" href="#/scenes"><span class="card-kicker">장면</span><span class="card-title">${keyDone}/${keyScenes.length}</span><span class="card-sub">핵심 장면 완료</span></a>
-      <a class="card" href="#/expr"><span class="card-kicker">표현 사전</span><span class="card-title">${state.mastered.size}/${state.expressions.length}</span><span class="card-sub">익힌 표현</span></a>
-      <a class="card" href="#/stats"><span class="card-kicker">나의 기록</span><span class="card-title">🔥 ${streak()}일</span><span class="card-sub">연속 학습 · 녹음 ${stats().totals.recs}개</span></a>
-      <a class="card" href="#/favs"><span class="card-kicker">⭐ 내 명대사</span><span class="card-title">${favLines().length}줄</span><span class="card-sub">대사 옆 ☆로 모으기</span></a>
-      <a class="card" href="#/talk"><span class="card-kicker">💬 AI 대화 연습</span><span class="card-title">역할극</span><span class="card-sub">저장한 표현 써보기</span></a>
+      <button class="card" id="continue">
+        <span class="card-kicker">📖 대본 이어 보기</span>
+        <span class="card-title small">${esc(sceneTitle(target))}</span>
+        <span class="card-sub">${p ? `${startIndex + 1}번째 대사부터` : '처음부터'} · ${modeLabel(state.settings.mode)}</span>
+      </button>
+      <button class="card" id="drill">
+        <span class="card-kicker">🔁 표현 복습</span>
+        <span class="card-title small">핵심 표현 15개</span>
+        <span class="card-sub">한국어 듣고 → 영어로 말하기</span>
+      </button>
     </div>
     <aside class="safety">
       <b>🚗 운전 중 사용 팁</b>
@@ -151,7 +146,7 @@ export function renderHome() {
   updateHomeStrip();
   $app.querySelectorAll('[data-drive]').forEach((b) => b.onclick = () => startDrive(+b.dataset.drive));
   document.getElementById('continue').onclick = () => { loadScene(target, { index: startIndex, autoplay: true }); go('#/scene/' + target.id); };
-  document.getElementById('drill').onclick = () => startDrill(pickExpressions(15), '표현 드라이브 · 복습 우선 15');
+  document.getElementById('drill').onclick = () => startDrill(pickExpressions(15), '🔁 표현 복습 · 15개');
 }
 
 export function updateHomeStrip() {
@@ -240,7 +235,7 @@ export async function renderStats() {
         </div>`).join('')}
       <p class="muted tiny">대사가 있는 장면 기준 · 장면을 끝까지 재생하면 완료</p>
     </section>
-    <section class="panel"><h3>Drill Dictionary 복습 단계</h3>
+    <section class="panel"><h3>내 단어장 복습 단계</h3>
       ${words.length ? `
         <p class="week-sum"><b>${words.length}개</b> 저장 · 오늘 복습 ${dueNow}개 · 졸업 ${boxes[6]}개</p>
         ${boxes.map((n, b) => `
@@ -249,7 +244,7 @@ export async function renderStats() {
             <span class="act-track box${b}"><i style="width:${(n / maxBox) * 100}%"></i></span>
             <span class="act-num">${n}</span>
           </div>`).join('')}
-        <p class="muted tiny">새 단어 → 1일 → 2일 → 4일 → 1주 → 2주 → 1달(졸업). 끝까지 들으면 한 단계 위로, '어려워요'는 처음으로.</p>`
+        <p class="muted tiny">새 단어 → 1일 → 2일 → 4일 → 1주 → 2주 → 1달(졸업). 끝까지 들으면 한 단계 위로, '다시 볼래요'는 처음으로.</p>`
         : '<p class="muted small">대본에서 단어를 눌러 저장하면 여기서 단계별로 보여요.</p>'}
     </section>
     <section class="panel"><h3>누적</h3>
@@ -312,4 +307,4 @@ export function startDrill(list, title) {
   go('#/drill');
 }
 
-export const modeLabel = (m) => ({ listen: '듣기', shadow: '쉐도잉', role: '롤플레이' }[m]);
+export const modeLabel = (m) => ({ listen: '듣기', shadow: '따라 말하기', role: '역할 연기' }[m]);

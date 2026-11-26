@@ -22,11 +22,11 @@ export function renderSettings() {
   shell('설정', `
     <section class="panel"><h3>재생</h3>
       ${range('rate', '말하기 속도', 0.6, 1.3, 0.05, (v) => v + '×')}
-      ${range('repeat', '쉐도잉 반복 횟수', 1, 4, 1, (v) => v + '회')}
+      ${range('repeat', '따라 말하기 반복 횟수', 1, 4, 1, (v) => v + '회')}
       ${range('gapFactor', '따라 말할 시간', 0.8, 2.5, 0.1, (v) => '대사 길이 × ' + v)}
-      ${toggle('narration', '지문(장면 묘사)도 읽기', '듣기 연습용. 쉐도잉 간격 없이 읽음')}
-      ${toggle('roleReveal', '롤플레이: 내 차례 뒤 정답 들려주기')}
-      ${toggle('drillKoreanFirst', '표현 드라이브: 한국어 뜻 먼저', '끄면 영어만 반복')}
+      ${toggle('narration', '지문(장면 묘사)도 읽기', '듣기 연습용. 따라 말할 시간 없이 읽음')}
+      ${toggle('roleReveal', '역할 연기: 내 차례 뒤 정답 들려주기')}
+      ${toggle('drillKoreanFirst', '표현 복습: 한국어 뜻 먼저', '끄면 영어만 반복')}
       ${toggle('loopScene', '장면 끝나면 처음부터 반복')}
       ${toggle('wakeLock', '재생 중 화면 켜두기')}
       ${toggle('voiceMotivation', '응원 메시지 음성으로 듣기', '재생 중 카드 사이에 짧게 한국어+영어로')}
@@ -44,7 +44,7 @@ export function renderSettings() {
       <p id="koStatus" class="status"></p>
     </section>
     <section class="panel"><h3>학습 데이터 백업</h3>
-      <p class="muted small">진도·Drill Dictionary·점수·연속 학습일·편지·해석·녹음을 파일 하나로 저장합니다. 폰을 바꾸거나 크롬 데이터를 지우기 전에 받아두세요. API 키는 백업에 넣지 않습니다.</p>
+      <p class="muted small">진도·내 단어장·점수·연속 학습일·편지·해석·녹음을 파일 하나로 저장합니다. 폰을 바꾸거나 크롬 데이터를 지우기 전에 받아두세요. API 키는 백업에 넣지 않습니다.</p>
       <label class="switch block"><input type="checkbox" id="bkScript" checked><span>대본 데이터도 포함<small>끄면 복원 후 PDF를 다시 불러와야 해요</small></span></label>
       <div class="row wrap">
         <button class="ghost" id="backup">⬇ 백업 파일 만들기</button>

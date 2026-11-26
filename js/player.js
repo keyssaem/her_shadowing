@@ -198,9 +198,12 @@ export class Player {
         if (token !== this.token) return;
         this.status = st.label || '';
         this.chunk = st.chunk || null;
+        // Expose the current pause so the UI can show a countdown bar.
+        this.waitMs = st.type === 'wait' ? st.ms : 0;
+        this.waitEnd = st.type === 'wait' ? Date.now() + st.ms : 0;
         this.emit();
         if (st.type === 'speak') await speak(st.text, st);
-        else if (st.type === 'wait') { if (!(await this.sleep(st.ms, token))) return; }
+        else if (st.type === 'wait') { const ok = await this.sleep(st.ms, token); this.waitEnd = 0; if (!ok) return; }
         else if (st.type === 'beep') await beep(st.freq);
       }
       if (token !== this.token) return;
@@ -249,23 +252,23 @@ export class Player {
     }
 
     if (card.kind === 'action') {
-      steps.push({ type: 'speak', text: speakable(card.text), ...voiceFor(null), rate: rate * 1.05, label: '지문' });
+      steps.push({ type: 'speak', text: speakable(card.text), ...voiceFor(null), rate: rate * 1.05, label: '📜 장면 설명' });
       steps.push({ type: 'wait', ms: 300 });
       return steps;
     }
 
     if (card.kind === 'expr') {
       if (s.drillKoreanFirst && card.ko) {
-        steps.push({ type: 'speak', text: card.ko, voiceName: s.voices.korean, lang: 'ko-KR', rate: 1, label: '한국어 뜻' });
+        steps.push({ type: 'speak', text: card.ko, voiceName: s.voices.korean, lang: 'ko-KR', rate: 1, label: '🇰🇷 뜻을 들어요' });
         steps.push({ type: 'beep', freq: 660 });
-        steps.push({ type: 'wait', ms: gapMs(card.en), label: '영어로 말해보세요' });
+        steps.push({ type: 'wait', ms: gapMs(card.en), label: '🗣 영어로 말해보세요' });
       }
       for (let r = 0; r < s.repeat; r++) {
-        steps.push({ type: 'speak', text: speakable(card.en), ...voiceFor(card.sp || 'SAMANTHA'), label: '듣기' });
-        steps.push({ type: 'wait', ms: gapMs(card.en), label: '따라 말하기' });
+        steps.push({ type: 'speak', text: speakable(card.en), ...voiceFor(card.sp || 'SAMANTHA'), label: '🎧 들어보세요' });
+        steps.push({ type: 'wait', ms: gapMs(card.en), label: '🗣 따라 말하세요' });
       }
       if (card.source) {
-        steps.push({ type: 'speak', text: speakable(card.source.text), ...voiceFor(card.source.sp), label: '원래 대사' });
+        steps.push({ type: 'speak', text: speakable(card.source.text), ...voiceFor(card.source.sp), label: '🎬 영화 속 대사' });
         steps.push({ type: 'wait', ms: 700 });
       }
       return steps;
@@ -275,25 +278,25 @@ export class Player {
       // word → (repeat) → English definition → Korean note → context chunk to shadow → word
       const wordVoice = { voiceName: s.voices.samantha, rate, pitch: 1 };
       for (let r = 0; r < s.repeat; r++) {
-        steps.push({ type: 'speak', text: card.text, ...wordVoice, label: '단어' });
-        steps.push({ type: 'wait', ms: gapMs(card.text), label: '따라 말하기' });
+        steps.push({ type: 'speak', text: card.text, ...wordVoice, label: '🎧 단어를 들어요' });
+        steps.push({ type: 'wait', ms: gapMs(card.text), label: '🗣 따라 말하세요' });
       }
       if (card.def) {
-        steps.push({ type: 'speak', text: (card.pos ? card.pos + '. ' : '') + card.def, voiceName: s.voices.narrator, rate, label: '영영 뜻' });
+        steps.push({ type: 'speak', text: (card.pos ? card.pos + '. ' : '') + card.def, voiceName: s.voices.narrator, rate, label: '📖 영어 뜻' });
         steps.push({ type: 'wait', ms: 500 });
       }
       if (card.ko) {
-        steps.push({ type: 'speak', text: card.ko, voiceName: s.voices.korean, lang: 'ko-KR', rate: 1, label: '한국어' });
+        steps.push({ type: 'speak', text: card.ko, voiceName: s.voices.korean, lang: 'ko-KR', rate: 1, label: '🇰🇷 한국어' });
         steps.push({ type: 'wait', ms: 400 });
       }
       if (card.ctx?.text) {
         const chunks = chunkLine(card.ctx.text);
         const lc = card.text.toLowerCase();
         const chunk = chunks.find((c) => c.toLowerCase().includes(lc)) || chunks[0];
-        steps.push({ type: 'speak', text: speakable(chunk), ...voiceFor(card.ctx.sp), label: '대사 속에서' });
-        steps.push({ type: 'wait', ms: gapMs(chunk), label: '대사 따라 말하기' });
+        steps.push({ type: 'speak', text: speakable(chunk), ...voiceFor(card.ctx.sp), label: '🎬 대사 속에서' });
+        steps.push({ type: 'wait', ms: gapMs(chunk), label: '🗣 따라 말하세요' });
       }
-      steps.push({ type: 'speak', text: card.text, ...wordVoice, label: '단어' });
+      steps.push({ type: 'speak', text: card.text, ...wordVoice, label: '🎧 단어를 들어요' });
       steps.push({ type: 'wait', ms: 600 });
       return steps;
     }
@@ -302,19 +305,19 @@ export class Player {
     const text = speakable(card.text);
     const mode = s.mode;
     if (mode === 'listen') {
-      steps.push({ type: 'speak', text, ...voiceFor(card.sp), label: '듣기' });
+      steps.push({ type: 'speak', text, ...voiceFor(card.sp), label: '🎧 들어보세요' });
       steps.push({ type: 'wait', ms: 350 });
       return steps;
     }
     if (mode === 'role' && card.sp === s.myRole) {
       steps.push({ type: 'beep', freq: 880 });
-      steps.push({ type: 'wait', ms: gapMs(card.text), label: '내 차례 — 말해보세요' });
-      if (s.roleReveal) steps.push({ type: 'speak', text, ...voiceFor(card.sp), label: '정답' });
+      steps.push({ type: 'wait', ms: gapMs(card.text), label: '🗣 내 차례! 말해보세요' });
+      if (s.roleReveal) steps.push({ type: 'speak', text, ...voiceFor(card.sp), label: '✅ 정답 확인' });
       steps.push({ type: 'wait', ms: 350 });
       return steps;
     }
     if (mode === 'role') {
-      steps.push({ type: 'speak', text, ...voiceFor(card.sp), label: '상대 대사' });
+      steps.push({ type: 'speak', text, ...voiceFor(card.sp), label: '🎧 상대 대사' });
       steps.push({ type: 'wait', ms: 300 });
       return steps;
     }
@@ -323,8 +326,8 @@ export class Player {
     for (const chunk of chunks) {
       const shown = chunks.length > 1 ? chunk : null;
       for (let r = 0; r < s.repeat; r++) {
-        steps.push({ type: 'speak', text: chunk, ...voiceFor(card.sp), label: r ? `다시 (${r + 1}/${s.repeat})` : '듣기', chunk: shown });
-        steps.push({ type: 'wait', ms: gapMs(chunk), label: '따라 말하기', chunk: shown });
+        steps.push({ type: 'speak', text: chunk, ...voiceFor(card.sp), label: r ? `🎧 한 번 더 (${r + 1}/${s.repeat})` : '🎧 들어보세요', chunk: shown });
+        steps.push({ type: 'wait', ms: gapMs(chunk), label: '🗣 따라 말하세요', chunk: shown });
       }
     }
     return steps;

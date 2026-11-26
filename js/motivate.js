@@ -77,7 +77,7 @@ const P = {
     ['"{word}" 한 단계 위로. 잊는 속도보다 빠르게 가고 있어요.', "\"{word}\" moved up. You're outrunning forgetting."],
   ],
   saved: [
-    ['Drill Dictionary {n}개! 영화가 내 단어장이 되고 있어요.', '{n} words saved. The film is turning into your notebook.'],
+    ['내 단어장 {n}개! 영화가 내 단어장이 되고 있어요.', '{n} words saved. The film is turning into your notebook.'],
   ],
   lines: [
     ['따라 말한 대사 {n}줄 돌파!', "{n} lines spoken. That's real practice."],
