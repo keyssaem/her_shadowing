@@ -193,7 +193,15 @@ export class Player {
   stepsFor(card) {
     const s = this.getSettings();
     const rate = s.rate;
-    const voiceFor = (sp) => ({ voiceName: s.voices[roleOf(sp)], pitch: pitchOf(sp), rate });
+    // Android often exposes a single genderless voice per locale. When a male role
+    // ends up on the same voice as Samantha, lower its pitch so speakers stay distinct.
+    const voiceFor = (sp) => {
+      const role = roleOf(sp);
+      const voiceName = s.voices[role];
+      let pitch = pitchOf(sp);
+      if ((role === 'theodore' || role === 'male') && voiceName && voiceName === s.voices.samantha) pitch *= 0.8;
+      return { voiceName, pitch, rate };
+    };
     const gapMs = (text) => Math.round(estimateSeconds(text, rate) * s.gapFactor * 1000) + 400;
     const steps = [];
 
