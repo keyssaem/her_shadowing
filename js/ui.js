@@ -9,6 +9,7 @@ import { renderMyDict, renderDrill, renderExpressions } from './view-study.js';
 import { renderSettings } from './view-settings.js';
 import { renderTalk } from './view-talk.js';
 import { renderFavs } from './view-favs.js';
+import { renderQuiz } from './view-quiz.js';
 
 // ---------- routing ----------
 export function go(hash) { if (location.hash !== hash) location.hash = hash; else render(); }
@@ -28,6 +29,7 @@ export function render() {
   if (route === 'go') return renderGo();
   if (route === 'talk') return renderTalk();
   if (route === 'favs') return renderFavs();
+  if (route === 'quiz') return renderQuiz(arg);
   if (route === 'review') return REVIEW_TABS.find((t) => t.id === arg)?.render() ?? REVIEW_TABS.find((t) => t.id === lastReviewTab)?.render() ?? renderMyDict();
   return renderHome();
 }
@@ -37,6 +39,7 @@ const TABS = [
   { id: 'home', icon: '🚗', label: '출발', href: '#/', routes: ['', 'go'] },
   { id: 'script', icon: '📖', label: '대본', href: '#/scenes', routes: ['scenes', 'scene'] },
   { id: 'review', icon: '🔁', label: '복습', href: '#/review', routes: ['review', 'mydict', 'expr', 'favs', 'talk', 'drill'] },
+  { id: 'quiz', icon: '🎮', label: '퀴즈', href: '#/quiz', routes: ['quiz'] },
   { id: 'stats', icon: '📊', label: '기록', href: '#/stats', routes: ['stats'] },
 ];
 const currentRoute = () => location.hash.replace(/^#\/?/, '').split('/')[0];
@@ -204,6 +207,25 @@ export function updatePlayerUI(force = false) {
     }
     const li = $app.querySelector('.lines .active');
     if (li) li.classList.toggle('my-turn', /내 차례/.test(player.status));
+  }
+  const $ans = document.getElementById('answers');
+  if ($ans) {
+    $ans.hidden = !(c && c.kind === 'two');
+    if (c && c.kind === 'two') {
+      $ans.querySelectorAll('[data-ans]').forEach((b, k) => { b.querySelector('span').textContent = c.q.options[k]; b.disabled = !player.awaiting; });
+    }
+  }
+  if (state.view === 'drill' && c && c.kind === 'two') {
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    set('dcount', `${player.index + 1} / ${player.cards.length} · 🎮 퀴즈`);
+    set('dko', '이 뜻의 영어 표현은?');
+    set('den', c.q.prompt);
+    set('dnote', '1번 = 다음 곡 · 2번 = 이전 곡 버튼, 또는 아래 버튼');
+    set('dsrc', '');
+    const den = document.getElementById('den'); if (den) den.classList.remove('line-text');
+    const m = document.getElementById('master'); if (m) m.hidden = true;
+    const h = document.getElementById('hard'); if (h) h.hidden = true;
+    return;
   }
   if (state.view === 'drill' && c && (c.kind === 'line' || c.kind === 'cue' || c.kind === 'action')) {
     const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };

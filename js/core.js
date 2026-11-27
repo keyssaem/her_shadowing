@@ -3,6 +3,7 @@ import { Player } from './player.js';
 import { estimateSeconds } from './tts.js';
 import { myDict, makeSrs } from './dict.js';
 import { speedFor, SPEED_OFFSETS } from './speed.js';
+import { makeTwoChoice } from './quiz.js';
 import { track, lineLetter, stats } from './motivate.js';
 import { updateHomeStrip } from './view-home.js';
 import { toast, openLetter, updatePlayerUI } from './ui.js';
@@ -241,8 +242,74 @@ export function planDrive(minutes) {
     push(cue('마지막으로 내 명대사.'));
     favs.forEach((f) => push(favCard(f)));
   }
+  // 5) Bonus audio quiz, answered with the steering-wheel buttons.
+  const quiz = audioQuizCards(3);
+  if (quiz.length) {
+    push(cue('보너스 퀴즈 세 문제. 1번이면 다음 곡, 2번이면 이전 곡 버튼을 누르세요.'));
+    quiz.forEach(push);
+  }
   return { cards, minutes, est: Math.round(used / 60), words: words.length, scenes: sceneTitles, favs: favs.length };
 }
+
+// ---------- quiz store: results feed the review schedule + wrong-answer notes ----------
+export const quizStore = {
+  wrong: () => LS.get('quiz.wrong', {}),
+  /** Record one answer. Expression questions update that expression's review schedule. */
+  record(q, ok) {
+    if (q.ref) exprSrs.review(q.ref, ok ? 'good' : 'hard');
+    const w = LS.get('quiz.wrong', {});
+    if (ok) delete w[q.key]; else w[q.key] = { q, at: Date.now(), n: (w[q.key]?.n || 0) + 1 };
+    LS.set('quiz.wrong', w);
+    const st = LS.get('quiz.stats', { correct: 0, total: 0, rounds: 0 });
+    st.total++; if (ok) st.correct++;
+    LS.set('quiz.stats', st);
+  },
+  stats: () => LS.get('quiz.stats', { correct: 0, total: 0, rounds: 0 }),
+  best: () => LS.get('quiz.best', {}),
+  /** Save a finished round; returns true when it beats the previous best. */
+  finishRound(mode, correct, total, stars) {
+    const best = LS.get('quiz.best', {});
+    const prev = best[mode];
+    const better = !prev || stars > prev.stars || (stars === prev.stars && correct / total > prev.correct / prev.total);
+    if (better) best[mode] = { stars, correct, total, at: Date.now() };
+    LS.set('quiz.best', best);
+    const st = LS.get('quiz.stats', { correct: 0, total: 0, rounds: 0 });
+    st.rounds++; LS.set('quiz.stats', st);
+    return better && !!prev;
+  },
+};
+
+/** Audio two-choice quiz cards for hands-free play. */
+export function audioQuizCards(n) {
+  return pickExpressions(n)
+    .map((e) => makeTwoChoice(e, state.expressions))
+    .filter(Boolean)
+    .map((q) => ({ kind: 'two', q, text: q.prompt }));
+}
+
+// Spoken feedback after a steering-wheel answer (1 = next track, 2 = previous track).
+let audioTally = { correct: 0, total: 0 };
+player.onAnswer = (card, choice) => {
+  const q = card.q;
+  const ok = choice - 1 === q.answer;
+  const ko = { voiceName: state.settings.voices.korean, lang: 'ko-KR', rate: 1.05 };
+  const en = { voiceName: state.settings.voices[q.sp === 'THEODORE' ? 'theodore' : 'samantha'], rate: state.settings.rate };
+  const firstTwo = player.cards.findIndex((c) => c.kind === 'two');
+  if (player.index === firstTwo) audioTally = { correct: 0, total: 0 };
+  audioTally.total++; if (ok) audioTally.correct++;
+  quizStore.record(q, ok);
+  const steps = ok
+    ? [{ type: 'beep', freq: 1318, label: '⭕ 정답!' }, { type: 'speak', text: '정답!', ...ko, label: '⭕ 정답!' }]
+    : [{ type: 'beep', freq: 300, dur: 260, label: '❌ 아쉬워요' },
+      { type: 'speak', text: choice ? `아쉬워요. 정답은 ${q.answer + 1}번.` : `정답은 ${q.answer + 1}번.`, ...ko, label: `정답은 ${q.answer + 1}번` }];
+  steps.push({ type: 'speak', text: q.options[q.answer], ...en, label: `✅ ${q.options[q.answer]}` });
+  steps.push({ type: 'wait', ms: 500 });
+  const lastTwo = player.cards.map((c) => c.kind).lastIndexOf('two');
+  if (player.index === lastTwo) {
+    steps.push({ type: 'speak', text: `퀴즈 끝! ${audioTally.total}문제 중 ${audioTally.correct}문제 맞혔어요.`, ...ko, label: `🎮 ${audioTally.correct}/${audioTally.total}` });
+  }
+  return steps;
+};
 
 // ---------- favourite lines ("내 명대사") ----------
 const favKey = (sceneId, itemIndex) => `${sceneId}:${itemIndex}`;

@@ -19,6 +19,63 @@ const { makeSrs, keyOf, guessPos } = await import('../js/dict.js');
 const { speedFor, isFullSpeed } = await import('../js/speed.js');
 const { parseScript } = await import('../js/parser.js');
 const { weekReport } = await import('../js/motivate.js');
+const Q = await import('../js/quiz.js');
+
+// Deterministic random for repeatable quiz tests.
+const seeded = (seed = 7) => () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; };
+const sampleScenes = [{
+  id: 'sc1', items: [
+    { t: 'd', sp: 'THEODORE', text: "Maybe we should call it a night. I've had such an amazing time.", page: 39 },
+    { t: 'd', sp: 'SAMANTHA', text: 'You can still wallow in your misery, just do it while getting dressed.', page: 31 },
+    { t: 'a', text: 'He walks away.' },
+    { t: 'd', sp: 'AMY', text: 'Charles and I split up after eight long years together.', page: 53 },
+  ],
+}];
+const ex = (id, en, ko, cat, idx) => ({ id, en, ko, cat, source: { sceneId: 'sc1', index: idx, sp: sampleScenes[0].items[idx].sp, text: sampleScenes[0].items[idx].text } });
+const sampleExprs = [
+  ex('e1', 'Maybe we should call it a night.', '오늘은 이만하자', 'A', 0),
+  ex('e2', 'You can still wallow in your misery', '슬픔에 빠져 있어도 돼', 'A', 1),
+  ex('e3', 'Charles and I split up', '우리 헤어졌어', 'A', 3),
+];
+
+test('quiz: cloze blanks a key word of the expression inside the line', () => {
+  const pool = Q.wordPool(sampleScenes);
+  const q = Q.makeCloze(sampleExprs[1], pool, seeded());
+  assert.equal(q.type, 'cloze');
+  assert.ok(q.prompt.includes('_____'));
+  assert.equal(q.options.length, 4);
+  assert.equal(q.options[q.answer].toLowerCase(), Q.keyWord(sampleExprs[1].en).toLowerCase());
+  assert.equal(Q.keyWord('Charles and I split up'), 'split'); // names are skipped
+  assert.equal(new Set(q.options.map((o) => o.toLowerCase())).size, 4);
+});
+
+test('quiz: distractor pool skips names and fillers', () => {
+  const pool = Q.wordPool([{ id: 's', items: [{ t: 'd', sp: 'AMY', text: 'Mmmm, Charles really wanted coffee. Hmmmm.' }] }]);
+  assert.ok(pool.includes('wanted') && pool.includes('coffee'));
+  assert.ok(!pool.includes('charles') && !pool.includes('mmmm') && !pool.includes('hmmmm'));
+});
+
+test('quiz: who-said-it keeps the right speaker among four options', () => {
+  const cands = Q.whoCandidates(sampleScenes);
+  assert.equal(cands.length, 3);
+  const q = Q.makeWho(cands[2], seeded());
+  assert.equal(q.options.length, 4);
+  assert.equal(q.options[q.answer], 'AMY');
+  assert.ok(q.options.includes('THEODORE') && q.options.includes('SAMANTHA'));
+});
+
+test('quiz: two-choice and match are well formed; stars scale with accuracy', () => {
+  const q = Q.makeTwoChoice(sampleExprs[0], sampleExprs, seeded());
+  assert.equal(q.options.length, 2);
+  assert.equal(q.options[q.answer], sampleExprs[0].en);
+  const m = Q.makeMatch(sampleExprs, seeded());
+  assert.equal(m.pairs.length, 3);
+  assert.deepEqual([...m.left].sort(), ['e1', 'e2', 'e3']);
+  assert.equal(Q.starsFor(10, 10), 3);
+  assert.equal(Q.starsFor(7, 10), 2);
+  assert.equal(Q.starsFor(4, 10), 1);
+  assert.equal(Q.starsFor(1, 10), 0);
+});
 
 test('scoring: contractions and slang count as the same words', () => {
   const r = scoreAgainst("I'm sorry, you go first. What were you going to say?", ['I am sorry you go first what were you gonna say']);

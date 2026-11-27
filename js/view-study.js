@@ -67,6 +67,10 @@ export function renderDrill() {
       <p class="drill-en" id="den"></p>
       <p class="drill-note" id="dnote"></p>
       <p class="drill-src" id="dsrc"></p>
+      <div class="answers" id="answers" hidden>
+        <button class="q-opt" data-ans="1"><b>1번</b> <span></span></button>
+        <button class="q-opt" data-ans="2"><b>2번</b> <span></span></button>
+      </div>
       <div class="row center">
         <button class="grade again" id="hard" hidden>↻ 다시 볼래요</button>
         <button class="grade know" id="master"></button>
@@ -92,6 +96,7 @@ export function renderDrill() {
       return;
     }
   };
+  document.querySelectorAll('[data-ans]').forEach((b) => b.onclick = () => player.answer(+b.dataset.ans));
   document.getElementById('hard').onclick = () => {
     const c = player.current;
     if (c?.kind === 'word') {

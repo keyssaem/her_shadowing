@@ -159,9 +159,34 @@ export class Player {
     this.emit();
     if (wasPlaying) this.play();
   }
-  next() { this.jump(this.index + 1); }
-  prev() { this.jump(this.index - 1); }
-  replay() { this.onReplay?.(this.current); this.jump(this.index); }
+  // During an audio quiz question, the media buttons answer instead of moving:
+  // next track = option 1, previous track = option 2.
+  next() { if (this.answer(1)) return; this.jump(this.index + 1); }
+  prev() { if (this.answer(2)) return; this.jump(this.index - 1); }
+  replay() { if (this.answer(2)) return; this.onReplay?.(this.current); this.jump(this.index); }
+
+  /** Resolve a pending audio-quiz answer (1 or 2). Returns true if one was waiting. */
+  answer(choice) {
+    if (!this.awaiting) return false;
+    const resolve = this.awaiting;
+    this.awaiting = null;
+    resolve(choice);
+    this.emit();
+    return true;
+  }
+  waitAnswer(ms, token) {
+    return new Promise((resolve) => {
+      this.awaiting = resolve;
+      this.emit(); // let the on-screen answer buttons enable now
+      const end = Date.now() + ms;
+      const tick = () => {
+        if (this.awaiting !== resolve) return; // answered
+        if (token !== this.token || Date.now() >= end) { this.awaiting = null; resolve(0); return; }
+        setTimeout(tick, 100);
+      };
+      tick();
+    });
+  }
 
   async sleep(ms, token) {
     const end = Date.now() + ms;
@@ -199,11 +224,25 @@ export class Player {
         this.status = st.label || '';
         this.chunk = st.chunk || null;
         // Expose the current pause so the UI can show a countdown bar.
-        this.waitMs = st.type === 'wait' ? st.ms : 0;
-        this.waitEnd = st.type === 'wait' ? Date.now() + st.ms : 0;
+        const timed = st.type === 'wait' || st.type === 'answer';
+        this.waitMs = timed ? st.ms : 0;
+        this.waitEnd = timed ? Date.now() + st.ms : 0;
         this.emit();
         if (st.type === 'speak') await speak(st.text, st);
         else if (st.type === 'wait') { const ok = await this.sleep(st.ms, token); this.waitEnd = 0; if (!ok) return; }
+        else if (st.type === 'answer') {
+          const choice = await this.waitAnswer(st.ms, token);
+          this.waitEnd = 0;
+          if (token !== this.token) return;
+          // Feedback for the answer is spoken right away (correct / wrong / timeout).
+          for (const f of this.onAnswer?.(this.current, choice) || []) {
+            if (token !== this.token) return;
+            this.status = f.label || this.status; this.emit();
+            if (f.type === 'speak') await speak(f.text, f);
+            else if (f.type === 'wait') { if (!(await this.sleep(f.ms, token))) return; }
+            else if (f.type === 'beep') await beep(f.freq, f.dur);
+          }
+        }
         else if (st.type === 'beep') await beep(st.freq);
       }
       if (token !== this.token) return;
@@ -242,6 +281,22 @@ export class Player {
     };
     const gapMs = (text) => Math.round(estimateSeconds(text, rate) * s.gapFactor * 1000) + 400;
     const steps = [];
+
+    if (card.kind === 'two') {
+      // Audio two-choice quiz: Korean meaning, then "1번 ..., 2번 ...", then answer by button.
+      const q = card.q;
+      const en = { voiceName: s.voices.samantha, rate, pitch: 1 };
+      const ko = { voiceName: s.voices.korean, lang: 'ko-KR', rate: 1.05 };
+      steps.push({ type: 'beep', freq: 988, label: '🎮 퀴즈' });
+      steps.push({ type: 'speak', text: q.prompt, ...ko, label: `🎮 "${q.prompt}" 영어로는?` });
+      steps.push({ type: 'speak', text: '1번', ...ko, label: '1번' });
+      steps.push({ type: 'speak', text: speakable(q.options[0]), ...en, label: `1번 · ${q.options[0]}` });
+      steps.push({ type: 'speak', text: '2번', ...ko, label: '2번' });
+      steps.push({ type: 'speak', text: speakable(q.options[1]), ...en, label: `2번 · ${q.options[1]}` });
+      steps.push({ type: 'beep', freq: 1175 });
+      steps.push({ type: 'answer', ms: 7000, label: '🎮 1번 = 다음 곡 · 2번 = 이전 곡' });
+      return steps;
+    }
 
     if (card.kind === 'cue') {
       // Spoken section announcement inside a drive session.

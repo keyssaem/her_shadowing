@@ -108,6 +108,10 @@ const P = {
     ['{from}점 → {score}점! 방금 실력이 늘었어요.', 'From {from} to {score}. You just got better.'],
     ['+{delta}점 상승. 반복이 효과를 내고 있어요.', 'Up {delta} points. Repetition is working.'],
   ],
+  quiz3: [
+    ['별 세 개! {total}문제 중 {n}문제 정답.', 'Three stars. {n} out of {total}.'],
+    ['퀴즈 만점에 가까워요. 표현이 머리에 붙었어요.', 'Nearly perfect. These phrases are sticking.'],
+  ],
   session: [
     ['오늘 {min}분, 대사 {lines}줄, 복습 {reviews}개. 잘했어요.', '{min} minutes today. Well done.'],
     ['끝까지 들었어요. 오늘 {lines}줄 따라 말했어요.', 'You made it to the end. {lines} lines today.'],
@@ -252,6 +256,10 @@ export function track(type, data = {}) {
       d.ms += data.ms; t.ms += data.ms;
       const goal = (data.goalMin || 15) * 60000;
       if (!d.goal && d.ms >= goal) { d.goal = true; out.push(pick('goal', { n: data.goalMin || 15 })); }
+      break;
+    }
+    case 'quiz': {
+      if (data.stars === 3) out.push(pick('quiz3', { n: data.correct, total: data.total }, { voice: false }));
       break;
     }
     case 'session': {
