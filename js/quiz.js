@@ -122,6 +122,87 @@ export function makeTwoChoice(expr, all, rand = Math.random) {
   };
 }
 
+// ---------- 5) Listen and choose: confusable sounds ----------
+const CONFUSABLE = [
+  ['going to', 'gonna'], ['gonna', 'going to'], ['want to', 'wanna'], ['wanna', 'want to'],
+  ["can't", 'can'], ['can', "can't"], ["didn't", 'did'], ["don't", 'do'], ["doesn't", 'does'],
+  ['the', 'a'], ['a', 'the'], ['in', 'on'], ['on', 'in'], ['at', 'and'],
+  ["he's", 'his'], ['his', "he's"], ['there', 'their'], ['their', 'there'], ['then', 'than'],
+  ["I'll", "I'd"], ["I'd", "I'll"], ['would', "wouldn't"], ['was', "wasn't"], ['is', "isn't"],
+  ['this', 'these'], ['that', 'what'], ["you're", 'your'], ['your', "you're"], ["it's", 'its'],
+  ['were', 'where'], ['think', 'thing'], ['want', "won't"], ['him', 'them'], ['her', 'here'],
+];
+const keepCase = (from, to) => (/^[A-Z]/.test(from) ? to[0].toUpperCase() + to.slice(1) : to);
+
+/** Variants of a sentence that each change one easily-misheard word. */
+export function soundAlikes(text) {
+  const out = [];
+  for (const [a, b] of CONFUSABLE) {
+    const re = new RegExp(`(^|[^A-Za-z'])(${a.replace(/'/g, "'")})(?![A-Za-z'])`, 'i');
+    const m = text.match(re);
+    if (!m) continue;
+    const v = text.replace(re, (_, pre, w) => pre + keepCase(w, b));
+    if (v !== text && !out.includes(v)) out.push(v);
+  }
+  return out;
+}
+
+export function makeListen(cand, rand = Math.random) {
+  const n = wordsIn(cand.text).length;
+  if (n < 4 || n > 16) return null;
+  const variants = shuffleWith(rand)(soundAlikes(cand.text)).slice(0, 3);
+  if (variants.length < 3) return null;
+  const options = shuffleWith(rand)([cand.text, ...variants]);
+  return {
+    type: 'listen', key: `listen:${cand.sceneId}:${cand.itemIndex}`, ref: null,
+    audio: cand.text, sp: cand.sp, sceneId: cand.sceneId, page: cand.page,
+    options, answer: options.indexOf(cand.text),
+  };
+}
+
+// ---------- 6) Put the words in order ----------
+export function makeOrder(cand, rand = Math.random) {
+  const words = cand.text.replace(/[.!?,;:"]+$/g, '').split(/\s+/).filter(Boolean);
+  if (words.length < 4 || words.length > 9) return null;
+  let shuffled = shuffleWith(rand)(words.map((w, i) => ({ w, i })));
+  for (let k = 0; k < 5 && shuffled.every((x, j) => x.i === j); k++) shuffled = shuffleWith(rand)(shuffled);
+  return {
+    type: 'order', key: `order:${cand.sceneId}:${cand.itemIndex}`, ref: null,
+    words, tiles: shuffled, sp: cand.sp, line: cand.text, sceneId: cand.sceneId, page: cand.page,
+  };
+}
+/** Does the tapped order spell the sentence? (Duplicate words are interchangeable.) */
+export const orderCorrect = (q, tappedIdx) =>
+  tappedIdx.length === q.words.length && tappedIdx.every((ti, k) => q.words[ti].toLowerCase() === q.words[k].toLowerCase());
+
+// ---------- 7) What comes next? ----------
+/** Pairs of (line, the reply that follows it from another speaker) in one scene. */
+export function nextPairs(scenes) {
+  const out = [];
+  for (const sc of scenes) {
+    const ds = sc.items.map((it, i) => ({ it, i })).filter((x) => x.it.t === 'd');
+    for (let k = 0; k + 1 < ds.length; k++) {
+      const a = ds[k], b = ds[k + 1];
+      const na = wordsIn(a.it.text).length, nb = wordsIn(b.it.text).length;
+      if (a.it.sp !== b.it.sp && na >= 3 && na <= 25 && nb >= 2 && nb <= 20) {
+        out.push({ sceneId: sc.id, itemIndex: a.i, sp: a.it.sp, text: a.it.text, nextSp: b.it.sp, next: b.it.text, page: a.it.page });
+      }
+    }
+  }
+  return out;
+}
+export function makeNext(pair, pool, rand = Math.random) {
+  const len = pair.next.length;
+  const others = shuffleWith(rand)(pool.filter((c) => c.text !== pair.next && c.sceneId !== pair.sceneId && Math.abs(c.text.length - len) < 60)).slice(0, 3).map((c) => c.text);
+  if (others.length < 3) return null;
+  const options = shuffleWith(rand)([pair.next, ...others]);
+  return {
+    type: 'next', key: `next:${pair.sceneId}:${pair.itemIndex}`, ref: null,
+    prompt: pair.text, sp: pair.sp, nextSp: pair.nextSp, sceneId: pair.sceneId, page: pair.page,
+    options, answer: options.indexOf(pair.next),
+  };
+}
+
 /** Stars for a finished round. */
 export const starsFor = (correct, total) => {
   const r = total ? correct / total : 0;

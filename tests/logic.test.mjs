@@ -64,6 +64,30 @@ test('quiz: who-said-it keeps the right speaker among four options', () => {
   assert.ok(q.options.includes('THEODORE') && q.options.includes('SAMANTHA'));
 });
 
+test('quiz: sound-alike variants change exactly one misheard word', () => {
+  const v = Q.soundAlikes("I'm going to tell you, and I can't wait.");
+  assert.ok(v.includes("I'm gonna tell you, and I can't wait."));
+  assert.ok(v.includes("I'm going to tell you, and I can wait."));
+  assert.ok(v.every((s) => s !== "I'm going to tell you, and I can't wait."));
+  const q = Q.makeListen({ sceneId: 's', itemIndex: 1, sp: 'AMY', text: "I'm going to tell you, and I can't wait for the party." }, seeded());
+  assert.equal(q.options.length, 4);
+  assert.equal(q.options[q.answer], "I'm going to tell you, and I can't wait for the party.");
+});
+
+test('quiz: word order and next-line questions', () => {
+  const o = Q.makeOrder({ sceneId: 's', itemIndex: 0, sp: 'AMY', text: 'Charles and I split up.' }, seeded());
+  assert.deepEqual(o.words, ['Charles', 'and', 'I', 'split', 'up']);
+  assert.ok(Q.orderCorrect(o, [0, 1, 2, 3, 4]));
+  assert.ok(!Q.orderCorrect(o, [1, 0, 2, 3, 4]));
+  const pairs = Q.nextPairs(sampleScenes);
+  assert.equal(pairs[0].sp, 'THEODORE');
+  assert.equal(pairs[0].nextSp, 'SAMANTHA');
+  const pool = [1, 2, 3, 4].map((k) => ({ sceneId: 'x' + k, text: `Another line number ${k} here.` }));
+  const n = Q.makeNext(pairs[0], pool, seeded());
+  assert.equal(n.options[n.answer], pairs[0].next);
+  assert.equal(n.options.length, 4);
+});
+
 test('quiz: two-choice and match are well formed; stars scale with accuracy', () => {
   const q = Q.makeTwoChoice(sampleExprs[0], sampleExprs, seeded());
   assert.equal(q.options.length, 2);

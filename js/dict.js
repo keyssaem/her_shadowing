@@ -70,14 +70,18 @@ function simplify(entries) {
     }
   }
   const phonetic = e.phonetic || (e.phonetics || []).find((p) => p.text)?.text || '';
-  return { headword: e.word, phonetic, meanings };
+  // Native-speaker recording (Wikimedia Commons, CC BY-SA); prefer US pronunciation.
+  const audios = entries.flatMap((en) => (en.phonetics || []).map((p) => p.audio).filter(Boolean));
+  const audio = audios.find((a) => /-us\.mp3$/i.test(a)) || audios.find((a) => /-uk\.mp3$/i.test(a)) || audios[0] || '';
+  return { headword: e.word, phonetic, meanings, audio };
 }
 
 /** Look up a word or phrase; tries simple lemma forms. Returns null if not found. */
 export async function lookup(phrase) {
   const cands = candidates(phrase);
   for (const c of cands) {
-    if (cache[c] !== undefined) { if (cache[c]) return cache[c]; continue; }
+    // Entries cached before pronunciation audio was kept get fetched once more.
+    if (cache[c] !== undefined && !(cache[c] && cache[c].audio === undefined)) { if (cache[c]) return cache[c]; continue; }
     try {
       const res = await fetch(API + encodeURIComponent(c));
       if (res.status === 404) { cache[c] = null; saveCache(); continue; }

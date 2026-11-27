@@ -3,10 +3,13 @@
 // Designed for hands-free use: Media Session hooks map headset / steering-wheel
 // buttons to play, pause, next and previous.
 
-import { speak, cancelSpeech, estimateSeconds, speakable, roleOf, pitchOf } from './tts.js';
+import { speak, cancelSpeech, estimateSeconds, speakable, roleOf, pitchOf, isHqOn } from './tts.js';
+import { beepHq } from './hq-tts.js';
 
 let audioCtx = null;
 function beep(freq = 880, ms = 140) {
+  // With high-quality voices on, tones are real audio files too (screen-off safe).
+  if (isHqOn()) return beepHq(freq, ms);
   try {
     audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
     const o = audioCtx.createOscillator();

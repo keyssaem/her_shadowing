@@ -1,11 +1,11 @@
 import { ACTS } from './content.js';
-import { speak, cancelSpeech, roleOf } from './tts.js';
+import { speak, cancelSpeech, roleOf, speakable } from './tts.js';
 import { lookup, guessPos, myDict, keyOf } from './dict.js';
 import { getKo, hasScene, translateScene, getKey } from './translate.js';
 import { track } from './motivate.js';
 import { canRecord, startRecording, saveRecording, listByKey, deleteRecording, playBlob, stopPlayback, canScore, listen, scoreAgainst } from './recorder.js';
 import { chunkLine } from './player.js';
-import { LS, state, saveSettings, $app, esc, sceneTitle, dialogueCount, player, deliver, scenePlays, sceneRate, loadScene, relTime, scoreKey, getScores, isFav, toggleFav } from './core.js';
+import { LS, state, saveSettings, $app, esc, sceneTitle, dialogueCount, player, deliver, scenePlays, sceneRate, loadScene, sceneCards, relTime, scoreKey, getScores, isFav, toggleFav } from './core.js';
 import { modeLabel } from './view-home.js';
 import { go, shell, closeSheet, toast, bigBar, bindBigBar, updatePlayerUI } from './ui.js';
 
@@ -25,12 +25,73 @@ export function renderScenes() {
         </a>`).join('')}
     </section>`;
   }).join('');
-  shell('장면', `
-    <div class="toolbar">
-      <label class="switch"><input type="checkbox" id="keyOnly" ${keyOnly ? 'checked' : ''}><span>★ 핵심 장면만</span></label>
-    </div>${body}`);
+  shell('대본', `
+    <div class="search-box">
+      <span aria-hidden="true">🔍</span>
+      <input id="search" type="search" placeholder="대사 검색 (영어 단어·표현, 해석 있으면 한국어도)" value="${esc(lastQuery)}" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <button class="icon-btn" id="clearSearch" aria-label="검색 지우기" ${lastQuery ? '' : 'hidden'}>✕</button>
+    </div>
+    <div id="results"></div>
+    <div id="sceneList">
+      <div class="toolbar">
+        <label class="switch"><input type="checkbox" id="keyOnly" ${keyOnly ? 'checked' : ''}><span>★ 핵심 장면만</span></label>
+      </div>${body}
+    </div>`);
   document.getElementById('keyOnly').onchange = (e) => { state.settings.keyOnly = e.target.checked; saveSettings(); renderScenes(); };
+  const $q = document.getElementById('search');
+  let t = 0;
+  $q.oninput = () => { clearTimeout(t); t = setTimeout(() => showResults($q.value), 180); };
+  document.getElementById('clearSearch').onclick = () => { $q.value = ''; showResults(''); $q.focus(); };
+  if (lastQuery) showResults(lastQuery);
 }
+
+// ---------- script search ----------
+let lastQuery = '';
+/** Find dialogue lines containing the query (English, or Korean translation if present). */
+export function searchScript(scenes, query, getKoFn = () => null, limit = 60) {
+  const q = query.trim().toLowerCase().replace(/[‘’]/g, "'");
+  if (q.length < 2) return [];
+  const out = [];
+  for (const sc of scenes) {
+    sc.items.forEach((it, i) => {
+      if (it.t !== 'd' || out.length >= limit) return;
+      const en = it.text.toLowerCase();
+      const ko = getKoFn(sc.id, i) || '';
+      if (en.includes(q) || (ko && ko.includes(query.trim()))) out.push({ scene: sc, itemIndex: i, item: it, ko: en.includes(q) ? '' : ko });
+    });
+  }
+  return out;
+}
+
+function showResults(query) {
+  lastQuery = query;
+  const $r = document.getElementById('results');
+  const $list = document.getElementById('sceneList');
+  const $clear = document.getElementById('clearSearch');
+  if ($clear) $clear.hidden = !query;
+  if (query.trim().length < 2) { $r.innerHTML = ''; $list.hidden = false; return; }
+  const hits = searchScript(state.script.scenes, query, getKo);
+  $list.hidden = true;
+  const mark = (s) => esc(s).replace(new RegExp(esc(query.trim()).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'ig'), (m) => `<mark>${m}</mark>`);
+  $r.innerHTML = hits.length
+    ? `<p class="sec-title">${hits.length >= 60 ? '60개 이상' : hits.length + '개'} 찾음</p>
+       <ul class="search-results">${hits.map((h, k) => `
+        <li><button data-hit="${k}">
+          <span class="sp role-${roleOf(h.item.sp)}">${esc(h.item.sp)}</span>
+          <span class="hit-text">${mark(h.item.text)}</span>
+          ${h.ko ? `<span class="hit-ko">${mark(h.ko)}</span>` : ''}
+          <small>${esc(sceneTitle(h.scene))} · p.${h.item.page}</small>
+        </button></li>`).join('')}</ul>`
+    : `<p class="muted empty">"${esc(query)}"이(가) 들어간 대사가 없어요.</p>`;
+  $r.querySelectorAll('[data-hit]').forEach((b) => b.onclick = () => {
+    const h = hits[+b.dataset.hit];
+    const idx = sceneCards(h.scene).findIndex((c) => c.itemIndex === h.itemIndex);
+    loadScene(h.scene, { index: Math.max(0, idx) });
+    pendingSelect = h.itemIndex;
+    go('#/scene/' + h.scene.id);
+  });
+}
+let pendingSelect = null;
 
 // ---------- scene player ----------
 export const TOKEN = /[A-Za-z0-9]+(?:'[A-Za-z]+)*|[^A-Za-z0-9]+/g;
@@ -116,6 +177,7 @@ export function renderScene(scene) {
       <span class="chip ghosty" title="장면을 끝까지 할 때마다 기본 속도 −0.15 → −0.05 → 기본 속도">${s.autoSpeed ? `⏩ ${sceneRate(scene.id)}× · ${scenePlays(scene.id) + 1}회차` : `⏩ ${s.rate}×`}</span>
       <button class="chip ${s.showKo && hasScene(scene.id) ? 'on' : ''}" id="koBtn">${hasScene(scene.id) ? (s.showKo ? '🇰🇷 해석 숨기기' : '🇰🇷 해석 보기') : getKey() ? '🇰🇷 이 장면 해석하기' : '🇰🇷 해석 <small class="why">API 키 필요</small>'}</button>
       <button class="chip" id="dictBtn">✍ 받아쓰기</button>
+      <button class="chip" id="autoBtn">🎯 채점하며 따라 말하기${canScore() ? '' : ' <small class="why">Chrome 필요</small>'}</button>
     </div>
     ${exprs.length ? `<details class="exprs"><summary>이 장면의 핵심 표현 ${exprs.length}개</summary>
       <ul>${exprs.map((e) => `<li><b>${esc(e.en)}</b> — ${esc(e.ko)}${e.note ? `<br><small>${esc(e.note)}</small>` : ''}</li>`).join('')}</ul></details>` : ''}
@@ -145,6 +207,11 @@ export function renderScene(scene) {
   });
   const $role = document.getElementById('role');
   if ($role) $role.onchange = () => { s.myRole = $role.value; saveSettings(); };
+  document.getElementById('autoBtn').onclick = () => {
+    if (!canScore()) return toast('음성 인식은 Android의 Chrome에서 돼요');
+    const cur = player.sceneId === scene.id ? player.current?.itemIndex : null;
+    runAutoScore(scene, cur != null && scene.items[cur]?.t === 'd' ? cur : null);
+  };
   document.getElementById('dictBtn').onclick = () => {
     // Start dictation at the current line (or the first one).
     const cur = player.sceneId === scene.id ? player.current?.itemIndex : null;
@@ -154,6 +221,12 @@ export function renderScene(scene) {
   bindLineInteractions(scene);
   bindBigBar();
   updatePlayerUI(true);
+  if (pendingSelect != null) {
+    // Coming from search: open the found line's menu so it stands out.
+    const li = $app.querySelector(`.lines [data-item="${pendingSelect}"]`);
+    pendingSelect = null;
+    if (li) { li.click(); li.scrollIntoView({ block: 'center' }); }
+  }
   if (!LS.get('hint.line', false)) {
     LS.set('hint.line', true);
     toast('대사를 누르면 메뉴가 열려요 · 단어를 길게 누르면 뜻이 나와요', '💡');
@@ -285,7 +358,8 @@ export function openWordSheet(scene, itemIndex, wordIndex, exprId) {
     else if (!result) {
       defs = `<p class="muted">영영사전에 "${esc(p)}" 항목이 없어요.${a !== b ? ' 표현 그대로 문맥과 함께 저장할 수 있고, 단어 하나를 눌러 뜻을 볼 수도 있어요.' : ''}</p>`;
     } else {
-      defs = `<p class="hw"><b>${esc(result.headword)}</b> <span class="muted">${esc(result.phonetic)}</span></p>` +
+      defs = `<p class="hw"><b>${esc(result.headword)}</b> <span class="muted">${esc(result.phonetic)}</span>
+          ${result.audio ? '<button class="btn-secondary native" data-x="native">🔊 원어민 발음</button>' : ''}</p>` +
         result.meanings.slice(0, 4).map((m) => `
           <div class="pos"><i>${esc(m.pos)}</i>
             <ol>${m.defs.slice(0, 3).map((d, i) => {
@@ -356,6 +430,11 @@ export function openWordSheet(scene, itemIndex, wordIndex, exprId) {
     if (x === 'single') { a = b = wordIndex; refresh(); }
     if (x === 'expr' && exprSpan) { [a, b] = exprSpan; refresh(); }
     if (x === 'say') { player.pause(); cancelSpeech(); speak(phrase(), { voiceName: state.settings.voices.samantha, rate: state.settings.rate }); }
+    if (x === 'native' && result?.audio) {
+      player.pause(); cancelSpeech();
+      const a = new Audio(result.audio);
+      a.play().catch(() => toast('발음 파일을 불러오지 못했어요 (인터넷 연결 확인)'));
+    }
     if (x === 'play') { closeSheet(); playFromItem(itemIndex); }
     if (x === 'add') {
       const cur = curated();
@@ -617,4 +696,123 @@ export function openPracticeSheet(scene, itemIndex, opts = {}) {
   if (opts.autoplay || mode === 'dictation') setTimeout(() => sayOriginal(), 250);
   loadHistory().then(() => draw());
   draw();
+}
+
+// ---------- auto-scored shadowing (seated) ----------
+// Plays each line (in chunks), listens to you repeat it, scores it, and moves on.
+// At the end: average score and your three weakest lines, which can go to the
+// "다시 연습할 대사" list that drives and the review tab bring back.
+let autoRun = null;
+
+export const weakLines = () => LS.get('weak', {});
+function setWeak(sceneId, itemIndex, score, on) {
+  const w = LS.get('weak', {});
+  const k = `${sceneId}:${itemIndex}`;
+  if (on) w[k] = { sceneId, itemIndex, score, at: Date.now() }; else delete w[k];
+  LS.set('weak', w);
+}
+
+async function runAutoScore(scene, startItem) {
+  player.pause(); cancelSpeech(); closeSheet();
+  const lines = scene.items.map((it, i) => ({ it, i })).filter((x) => x.it.t === 'd');
+  let start = Math.max(0, lines.findIndex((x) => x.i === startItem));
+  autoRun = { stop: false, results: [] };
+  const run = autoRun;
+  const panel = document.createElement('div');
+  panel.className = 'auto-panel';
+  panel.innerHTML = `<div class="ap-top"><b id="apStatus">🎯 채점 모드</b><span id="apPos"></span></div>
+    <div class="countdown"><i id="apBar" style="width:0%"></i></div>
+    <div class="ap-actions"><button class="btn-secondary" id="apSkip">건너뛰기</button><button class="btn-primary" id="apStop">■ 그만하고 결과 보기</button></div>`;
+  document.body.appendChild(panel);
+  const $s = panel.querySelector('#apStatus');
+  const $pos = panel.querySelector('#apPos');
+  let skip = null;
+  panel.querySelector('#apStop').onclick = () => { run.stop = true; skip?.(); cancelSpeech(); };
+  panel.querySelector('#apSkip').onclick = () => { skip?.(); cancelSpeech(); };
+
+  const rate = sceneRate(scene.id);
+  for (let n = start; n < lines.length && !run.stop; n++) {
+    const { it, i } = lines[n];
+    const li = $app.querySelector(`.lines [data-item="${i}"]`);
+    $app.querySelectorAll('.lines .active').forEach((x) => x.classList.remove('active'));
+    li?.classList.add('active');
+    li?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    $pos.textContent = `${n + 1} / ${lines.length}`;
+    panel.querySelector('#apBar').style.width = `${(n / lines.length) * 100}%`;
+    const scores = [];
+    for (const chunk of chunkLine(it.text)) {
+      if (run.stop) break;
+      $s.textContent = '🎧 들어보세요';
+      await speak(speakable(chunk), { voiceName: state.settings.voices[roleOf(it.sp)], rate });
+      if (run.stop) break;
+      $s.textContent = '🗣 따라 말하세요';
+      if (navigator.vibrate) navigator.vibrate(15);
+      try {
+        const l = listen((t) => { $s.textContent = '🗣 ' + t; });
+        skip = () => l.stop();
+        const alts = await l.result;
+        scores.push(scoreAgainst(chunk, alts).score);
+      } catch (e) {
+        if (/권한/.test(e.message)) { toast(e.message); run.stop = true; break; }
+        // no speech / skipped: count as not scored
+      }
+      skip = null;
+    }
+    if (!scores.length) continue;
+    const score = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
+    run.results.push({ i, sp: it.sp, text: it.text, score });
+    const all = getScores();
+    const k = scoreKey(`${scene.id}:${i}:all`);
+    all[k] = { best: Math.max(all[k]?.best ?? 0, score), last: score, n: (all[k]?.n || 0) + 1, at: Date.now() };
+    LS.set('scores', all);
+    if (score >= 85) setWeak(scene.id, i, score, false); // improved: no longer weak
+    li?.querySelector('.score-badge')?.remove();
+    li?.querySelector('.sp')?.insertAdjacentHTML('beforeend', ` <span class="score-badge ${score >= 90 ? 'hi' : score >= 70 ? 'mid' : 'lo'}">${score}</span>`);
+    $s.textContent = `${score >= 90 ? '👏' : score >= 70 ? '👍' : '💪'} ${score}점`;
+    await new Promise((r) => setTimeout(r, 450));
+  }
+  panel.remove();
+  autoRun = null;
+  showAutoSummary(scene, run.results);
+}
+
+function showAutoSummary(scene, results) {
+  if (!results.length) return toast('채점된 대사가 없어요. 마이크 가까이에서 또렷하게 말해보세요.');
+  const avg = Math.round(results.reduce((n, r) => n + r.score, 0) / results.length);
+  const weakest = results.slice().sort((a, b) => a.score - b.score).slice(0, 3).filter((r) => r.score < 90);
+  deliver(track('score', { score: avg, prev: null, text: sceneTitle(scene) }));
+  closeSheet();
+  const root = document.createElement('div');
+  root.id = 'sheet-root';
+  document.body.appendChild(root);
+  root.innerHTML = `
+    <div class="sheet-backdrop" data-x="close"></div>
+    <section class="sheet" role="dialog" aria-label="채점 결과">
+      <div class="sheet-handle"></div>
+      <div class="result">
+        <p class="muted small">${esc(sceneTitle(scene))} · ${results.length}줄 채점</p>
+        <h2>평균 ${avg}점</h2>
+        <p class="muted">${avg >= 90 ? '거의 원어민처럼 들렸어요!' : avg >= 75 ? '좋아요, 약한 대사만 다듬으면 돼요' : '반복할수록 확실히 올라가요'}</p>
+      </div>
+      ${weakest.length ? `<h4 class="sec">가장 약한 대사 ${weakest.length}개</h4>
+        <ul class="weak-list">${weakest.map((r) => `
+          <li><span class="score-badge ${r.score >= 70 ? 'mid' : 'lo'}">${r.score}</span>
+            <span><small class="sp">${esc(r.sp)}</small>${esc(r.text)}</span>
+            <button class="icon-btn" data-practice="${r.i}" aria-label="말하기 연습">🎙</button></li>`).join('')}</ul>
+        <button class="btn-primary wide" data-x="addweak">＋ 약한 대사 ${weakest.length}개를 "다시 연습할 대사"에 넣기</button>
+        <p class="muted tiny">복습 탭 ⭐ 명대사 화면과 출발 코스 마지막에 다시 나와요.</p>`
+        : '<p class="muted center">90점 아래 대사가 없어요. 완벽해요! 🎉</p>'}
+      <button class="btn-secondary wide" data-x="close">닫기</button>
+    </section>`;
+  root.addEventListener('click', (ev) => {
+    const p = ev.target.closest('[data-practice]');
+    if (p) return openPracticeSheet(scene, +p.dataset.practice);
+    const x = ev.target.closest('[data-x]')?.dataset.x;
+    if (x === 'close') closeSheet();
+    if (x === 'addweak') {
+      weakest.forEach((r) => setWeak(scene.id, r.i, r.score, true));
+      toast(`${weakest.length}개를 다시 연습할 대사에 넣었어요`, '🎯');
+      closeSheet();
+    }
+  });
 }

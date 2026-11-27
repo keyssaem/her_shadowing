@@ -1,6 +1,7 @@
 import { ACTS, annotateScenes, linkExpressions } from './content.js';
 import { Player } from './player.js';
-import { estimateSeconds } from './tts.js';
+import { estimateSeconds, configureHq } from './tts.js';
+import { DEFAULT_HQ_VOICES } from './hq-tts.js';
 import { myDict, makeSrs } from './dict.js';
 import { speedFor, SPEED_OFFSETS } from './speed.js';
 import { makeTwoChoice } from './quiz.js';
@@ -19,6 +20,7 @@ export const DEFAULT_SETTINGS = {
   mode: 'shadow', myRole: 'THEODORE', rate: 0.95, repeat: 2, gapFactor: 1.3,
   narration: false, roleReveal: true, drillKoreanFirst: true, loopScene: false, wakeLock: true,
   keyOnly: false, voices: {}, voiceMotivation: true, dailyGoal: 15, autoSpeed: true, showKo: false,
+  theme: 'auto', textSize: 'm', hqVoice: false, hqVoices: { ...DEFAULT_HQ_VOICES },
 };
 
 export const state = {
@@ -30,7 +32,13 @@ export const state = {
   expressions: [],
   view: null,
 };
-export const saveSettings = () => LS.set('settings', state.settings);
+/** Push voice settings to the speech layer (device voices + optional OpenAI voices). */
+export function syncVoices() {
+  const s = state.settings;
+  configureHq({ enabled: !!s.hqVoice, voices: { ...DEFAULT_HQ_VOICES, ...s.hqVoices }, deviceVoices: s.voices });
+}
+export const saveSettings = () => { LS.set('settings', state.settings); syncVoices(); };
+syncVoices();
 
 // Ask the browser not to evict our data (script, progress) under storage pressure,
 // so the PDF only ever needs to be imported once per device.
@@ -41,6 +49,17 @@ export async function ensurePersistent() {
     return await navigator.storage.persist();
   } catch { return null; }
 }
+
+/** Apply the theme and text size from settings to the page. */
+export function applyDisplay() {
+  const root = document.documentElement;
+  const { theme, textSize } = state.settings;
+  if (theme === 'light' || theme === 'dark') root.dataset.theme = theme; else delete root.dataset.theme;
+  if (textSize === 'l' || textSize === 'xl') root.dataset.size = textSize; else delete root.dataset.size;
+  const dark = theme === 'dark' || (theme !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#1b1311' : '#fbf3ec');
+}
+applyDisplay();
 
 export function hydrate() {
   if (!state.script) return;
@@ -242,6 +261,12 @@ export function planDrive(minutes) {
     push(cue('마지막으로 내 명대사.'));
     favs.forEach((f) => push(favCard(f)));
   }
+  // 4b) Lines that scored low in auto-scored shadowing.
+  const weak = shuffle(weakLineList()).slice(0, 2);
+  if (weak.length) {
+    push(cue('약했던 대사 다시 한 번.'));
+    weak.forEach((f) => push(favCard(f)));
+  }
   // 5) Bonus audio quiz, answered with the steering-wheel buttons.
   const quiz = audioQuizCards(3);
   if (quiz.length) {
@@ -270,7 +295,9 @@ export const quizStore = {
   finishRound(mode, correct, total, stars) {
     const best = LS.get('quiz.best', {});
     const prev = best[mode];
-    const better = !prev || stars > prev.stars || (stars === prev.stars && correct / total > prev.correct / prev.total);
+    const better = mode === 'survival'
+      ? !prev || correct > prev.correct // survival: the longest run wins
+      : !prev || stars > prev.stars || (stars === prev.stars && correct / total > prev.correct / prev.total);
     if (better) best[mode] = { stars, correct, total, at: Date.now() };
     LS.set('quiz.best', best);
     const st = LS.get('quiz.stats', { correct: 0, total: 0, rounds: 0 });
@@ -328,6 +355,14 @@ export function favLines() {
     .filter((f) => f.scene && f.scene.items[f.itemIndex]?.t === 'd')
     .map((f) => ({ ...f, item: f.scene.items[f.itemIndex] }))
     .sort((a, b) => b.added - a.added);
+}
+/** Lines saved as weak by auto-scored shadowing, resolved like favourites. */
+export function weakLineList() {
+  return Object.values(LS.get('weak', {}))
+    .map((f) => ({ ...f, scene: sceneById(f.sceneId) }))
+    .filter((f) => f.scene && f.scene.items[f.itemIndex]?.t === 'd')
+    .map((f) => ({ ...f, item: f.scene.items[f.itemIndex], added: f.at }))
+    .sort((a, b) => a.score - b.score);
 }
 export const favCard = (f) => ({ kind: 'line', sp: f.item.sp, text: f.item.text, paren: f.item.paren, itemIndex: f.itemIndex, sceneId: f.sceneId, fav: true });
 

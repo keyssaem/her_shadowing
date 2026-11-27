@@ -1,4 +1,5 @@
 // Web Speech synthesis wrapper with per-role voices and cancellation.
+import { speakHq, stopHq, getOpenAIKey, DEFAULT_HQ_VOICES } from './hq-tts.js';
 
 const FEMALE_SPEAKERS = new Set([
   'SAMANTHA', 'FEMALE OS VOICE', 'AMY', 'CATHERINE', 'BLIND DATE', 'SEXYKITTEN', 'ISABELLA',
@@ -89,11 +90,39 @@ export function speakable(text) {
 let generation = 0;
 export function cancelSpeech() {
   generation++;
-  speechSynthesis.cancel();
+  stopHq();
+  try { speechSynthesis.cancel(); } catch { /* no speech engine */ }
+}
+
+// ---------- high-quality voice routing ----------
+// When enabled (and an OpenAI key is saved), speech goes through cached OpenAI
+// audio clips so it keeps playing with the screen off. Device voices are the
+// fallback when a clip can't be fetched (e.g. offline and not cached yet).
+let hq = { enabled: false, voices: {}, deviceVoices: {} };
+export function configureHq(cfg) { hq = { ...hq, ...cfg }; }
+export const isHqOn = () => hq.enabled && !!getOpenAIKey();
+function hqVoiceFor({ voiceName, lang, slot }) {
+  if (/^ko/i.test(lang || '')) return hq.voices.korean || DEFAULT_HQ_VOICES.korean;
+  const s = slot || Object.keys(hq.deviceVoices).find((k) => k !== 'korean' && hq.deviceVoices[k] === voiceName) || 'narrator';
+  return hq.voices[s] || DEFAULT_HQ_VOICES[s] || 'alloy';
 }
 
 /** Speak text; resolves when finished or cancelled. */
-export async function speak(text, { voiceName, rate = 1, pitch = 1, lang = 'en-US' } = {}) {
+export async function speak(text, opts = {}) {
+  if (isHqOn()) {
+    const gen = generation;
+    try {
+      const ok = await speakHq(text, { voice: hqVoiceFor(opts), rate: opts.rate || 1 });
+      return ok && gen === generation;
+    } catch {
+      if (gen !== generation) return false;
+      // fall through to the device voice
+    }
+  }
+  return speakDevice(text, opts);
+}
+
+async function speakDevice(text, { voiceName, rate = 1, pitch = 1, lang = 'en-US' } = {}) {
   const gen = generation;
   const voice = findVoice(voiceName);
   for (const chunk of splitForSpeech(text)) {

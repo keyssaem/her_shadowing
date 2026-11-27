@@ -4,9 +4,10 @@ import { cancelSpeech } from './tts.js';
 import { myDict, boxLabel } from './dict.js';
 import { track, streak, stats, todayStats, activeDays, calendar } from './motivate.js';
 import { listAll, playBlob, stopPlayback, listen } from './recorder.js';
-import { LS, state, saveSettings, ensurePersistent, hydrate, $app, esc, sceneById, sceneTitle, dialogueCount, shuffle, player, pickExpressions, planDrive, loadScene, loadDrill, relTime, getScores, favLines } from './core.js';
+import { LS, state, saveSettings, ensurePersistent, hydrate, $app, esc, sceneById, sceneTitle, dialogueCount, shuffle, player, pickExpressions, planDrive, loadScene, loadDrill, relTime, getScores, favLines, exprSrs } from './core.js';
 import { go, shell, toast, openLetter } from './ui.js';
 import { startWordDrill } from './view-study.js';
+import { makeBackup, backupDue } from './view-settings.js';
 
 // ---------- departure screen (#/go) ----------
 // Full-screen, two giant buttons: meant to be opened from a home-screen
@@ -245,6 +246,20 @@ export async function renderStats() {
   const boxes = [0, 1, 2, 3, 4, 5, 6].map((b) => words.filter((w) => w.box === b).length);
   const maxBox = Math.max(1, ...boxes);
   const dueNow = myDict.due().length;
+  // Act-by-act mastery of the key expressions (0 new … 3 mastered).
+  const levelOf = (e) => {
+    if (state.mastered.has(e.id)) return 3;
+    const st = exprSrs.get(e.id);
+    if (!st) return 0;
+    return st.box >= 5 ? 3 : st.box >= 3 ? 2 : st.box >= 1 ? 1 : 0;
+  };
+  const mastery = ACTS.map((a) => {
+    const items = state.expressions
+      .filter((e) => e.source && sceneById(e.source.sceneId)?.act === a.n)
+      .map((e) => ({ id: e.id, en: e.en, ko: e.ko, level: levelOf(e) }));
+    const won = items.filter((x) => x.level >= 2).length;
+    return { ...a, items, won, total: items.length, pct: items.length ? Math.round((won / items.length) * 100) : 0 };
+  });
   const scores = Object.values(getScores());
   const avg = scores.length ? Math.round(scores.reduce((n, s) => n + s.best, 0) / scores.length) : null;
   const letters = stats().letters || [];
@@ -252,7 +267,14 @@ export async function renderStats() {
     const v = d.lines + d.reviews + d.recs * 2 + d.ms / 60000;
     return v === 0 ? 0 : v < 10 ? 1 : v < 30 ? 2 : v < 60 ? 3 : 4;
   };
+  const bk = backupDue();
   shell('나의 기록', `
+    ${bk ? `<div class="backup-nudge">
+      <span>💾</span>
+      <span><b>${bk.days == null ? '아직 백업한 적이 없어요' : `백업한 지 ${bk.days}일 지났어요`}</b>
+        <small>기록·단어장·녹음은 이 폰에만 있어요. 폰을 바꾸거나 데이터를 지우면 사라져요.</small></span>
+      <button class="btn-primary" id="backupNow">지금 백업</button>
+    </div>` : ''}
     <section class="stat-hero">
       <div><b>🔥 ${streak()}</b><small>연속 학습일</small></div>
       <div><b>${activeDays()}</b><small>총 학습일</small></div>
@@ -291,6 +313,15 @@ export async function renderStats() {
         </div>`).join('')}
       <p class="muted tiny">대사가 있는 장면 기준 · 장면을 끝까지 재생하면 완료</p>
     </section>
+    <section class="panel"><h3>막별 표현 마스터 지도</h3>
+      ${mastery.map((a) => `
+        <div class="mastery-act">
+          <div class="mastery-head"><b>${esc(a.ko)}</b><span class="muted">${a.total ? `${a.pct}% 정복 · ${a.won}/${a.total}` : '표현 없음'}</span></div>
+          <div class="mastery-grid">${a.items.map((x) => `<button class="m${x.level}" data-mexpr="${x.id}" aria-label="${esc(x.en)}"></button>`).join('')}</div>
+        </div>`).join('')}
+      <div class="legend"><small>처음</small><i class="lv0"></i><i style="background:color-mix(in srgb, var(--ok) 30%, var(--line))"></i><i style="background:color-mix(in srgb, var(--ok) 60%, var(--line))"></i><i style="background:var(--ok)"></i><small>정복</small></div>
+      <p class="muted tiny">칸 하나가 핵심 표현 하나예요. 복습·퀴즈에서 맞힐수록 진해지고, 4일 간격 이상이면 '정복'으로 셉니다. 칸을 누르면 표현이 보여요.</p>
+    </section>
     <section class="panel"><h3>내 단어장 복습 단계</h3>
       ${words.length ? `
         <p class="week-sum"><b>${words.length}개</b> 저장 · 오늘 복습 ${dueNow}개 · 졸업 ${boxes[6]}개</p>
@@ -324,9 +355,19 @@ export async function renderStats() {
       <label class="switch block"><input type="checkbox" id="vm" ${state.settings.voiceMotivation ? 'checked' : ''}><span>재생 중 응원 메시지 음성으로 듣기<small>카드 사이에 짧게 한국어+영어로</small></span></label>
     </section>`, { back: '#/' });
 
+  document.getElementById('backupNow')?.addEventListener('click', async (ev) => {
+    ev.currentTarget.disabled = true;
+    const n = await makeBackup(true);
+    toast(`백업 파일을 저장했어요 (녹음 ${n}개 포함) · Google Drive 등에 올려두세요`, '💾');
+    document.querySelector('.backup-nudge')?.remove();
+  });
   document.getElementById('goal').oninput = (e) => { state.settings.dailyGoal = +e.target.value; saveSettings(); document.getElementById('v-goal').textContent = e.target.value + '분'; };
   document.getElementById('vm').onchange = (e) => { state.settings.voiceMotivation = e.target.checked; saveSettings(); };
   $app.querySelectorAll('[data-letter]').forEach((b) => b.onclick = () => openLetter(letters.find((l) => l.id === b.dataset.letter)));
+  $app.querySelectorAll('[data-mexpr]').forEach((b) => b.onclick = () => {
+    const e = state.expressions.find((x) => x.id === b.dataset.mexpr);
+    if (e) toast(`${e.en} — ${e.ko}`);
+  });
 
   // Recordings grouped by line: first take vs latest take.
   const $recs = document.getElementById('recs');

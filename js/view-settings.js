@@ -1,9 +1,101 @@
 import { englishVoices, koreanVoices, speak, cancelSpeech } from './tts.js';
+import { OPENAI_VOICES, DEFAULT_HQ_VOICES, getOpenAIKey, setOpenAIKey, speakHq, clearClips, estimateCost } from './hq-tts.js';
+import { plannedClips, missingClips, generateClips } from './hq-prep.js';
 import { hasScene, translatedCount, translateScene, getKey, setKey } from './translate.js';
 import { exportRecordings, importRecordings } from './recorder.js';
-import { LS, state, saveSettings, ensurePersistent, $app, esc, sceneById, sceneTitle, dialogueCount, player, loadScene } from './core.js';
+import { LS, state, saveSettings, ensurePersistent, $app, esc, sceneById, sceneTitle, dialogueCount, player, loadScene, applyDisplay } from './core.js';
 import { importFile, openOnboarding } from './view-home.js';
 import { shell, toast } from './ui.js';
+
+// ---------- backup ----------
+/** Download a backup file of everything the app keeps here. Returns the recording count. */
+export async function makeBackup(withScript = true) {
+  const data = {};
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k.startsWith('her.') || k === 'her.apikey' || k === 'her.dictcache' || (!withScript && k === 'her.script')) continue;
+    data[k] = localStorage.getItem(k);
+  }
+  let recordings = [];
+  try { recordings = await exportRecordings(); } catch { /* no recordings store */ }
+  const backup = { app: 'her-shadowing', version: 1, exportedAt: new Date().toISOString(), localStorage: data, recordings };
+  const url = URL.createObjectURL(new Blob([JSON.stringify(backup)], { type: 'application/json' }));
+  const a = Object.assign(document.createElement('a'), { href: url, download: `her-shadowing-backup-${new Date().toISOString().slice(0, 10)}.json` });
+  a.click(); setTimeout(() => URL.revokeObjectURL(url), 4000);
+  LS.set('lastBackup', Date.now());
+  return recordings.length;
+}
+
+/** Remind after 14 days without a backup, once there is something worth keeping. */
+export function backupDue() {
+  const last = LS.get('lastBackup', 0);
+  const st = LS.get('stats', null);
+  const worth = (st?.totals?.lines || 0) + (st?.totals?.reviews || 0) + (st?.totals?.recs || 0) * 5 + Object.keys(LS.get('mydict', [])).length * 3 >= 30;
+  if (!worth) return null;
+  const days = last ? Math.floor((Date.now() - last) / 86400000) : null;
+  return days == null || days >= 14 ? { days } : null;
+}
+
+// ---------- high-quality voice settings ----------
+let genAbort = null;
+function bindHqSettings() {
+  const s = state.settings;
+  const $info = document.getElementById('hqInfo');
+  const $st = document.getElementById('hqStatus');
+  const refreshInfo = async () => {
+    if (!state.script) return;
+    const plan = plannedClips(state.script.scenes, state.expressions, s.hqVoices);
+    const { missing, chars, usd } = await missingClips(plan);
+    const have = plan.length - missing.length;
+    if ($info) $info.innerHTML = `대본 음성 ${have} / ${plan.length}개 준비됨${missing.length ? ` · 남은 ${missing.length}개 만들기 예상 비용 약 <b>$${usd.toFixed(2)}</b> (${chars.toLocaleString()}자)` : ' · ✅ 오프라인·화면 꺼짐 재생 준비 완료'}`;
+    return missing;
+  };
+  refreshInfo();
+
+  document.getElementById('saveOai').onclick = () => {
+    setOpenAIKey(document.getElementById('oaikey').value);
+    if (getOpenAIKey() && !s.hqVoice) s.hqVoice = true;
+    saveSettings();
+    toast(getOpenAIKey() ? 'OpenAI 키를 저장하고 고품질 음성을 켰어요' : 'OpenAI 키를 지웠어요');
+    renderSettings();
+  };
+  document.getElementById('hqOn').onchange = (e) => { s.hqVoice = e.target.checked; saveSettings(); };
+  $app.querySelectorAll('[data-hqv]').forEach((sel) => sel.onchange = () => {
+    s.hqVoices = { ...DEFAULT_HQ_VOICES, ...s.hqVoices, [sel.dataset.hqv]: sel.value };
+    saveSettings(); refreshInfo();
+  });
+  const SAMPLE = { theodore: "Hey, how's it going?", samantha: "Hello, I'm here.", female: 'That sounds about right.', male: 'Good to see you, Theodore.', narrator: 'Email from Amy.', korean: '솔직하게 말해두고 싶어.' };
+  $app.querySelectorAll('[data-hqtest]').forEach((b) => b.onclick = async () => {
+    player.pause(); cancelSpeech();
+    const slot = b.dataset.hqtest;
+    try { await speakHq(SAMPLE[slot], { voice: (s.hqVoices || {})[slot] || DEFAULT_HQ_VOICES[slot], rate: s.rate }); } catch (e) { toast(e.message === 'no-key' ? 'API 키를 먼저 저장하세요' : e.message); }
+  });
+  document.getElementById('hqGen').onclick = async (ev) => {
+    const missing = await refreshInfo();
+    if (!missing?.length) return toast('이미 모두 준비돼 있어요');
+    const usd = estimateCost(missing.reduce((n, c) => n + c.text.length, 0));
+    if (!confirm(`음성 파일 ${missing.length}개를 만들까요?\n예상 비용 약 $${usd.toFixed(2)} (OpenAI 계정으로 청구)\nWi-Fi에서 하는 걸 권해요.`)) return;
+    const btn = ev.currentTarget; btn.disabled = true;
+    const $stop = document.getElementById('hqStop'); $stop.hidden = false;
+    genAbort = new AbortController();
+    $stop.onclick = () => genAbort.abort();
+    try {
+      const r = await generateClips(missing, (d, t) => { $st.textContent = `만드는 중… ${d} / ${t}`; }, genAbort.signal);
+      $st.textContent = genAbort.signal.aborted ? `멈춤: ${r.done}개 만들었어요. 다시 누르면 이어서 만들어요.` : `완료: ${r.done - r.failed}개 만들었어요${r.failed ? ` (실패 ${r.failed}개 — 다시 누르면 재시도)` : ''}.`;
+      if (!s.hqVoice) { s.hqVoice = true; saveSettings(); }
+    } catch (e) {
+      $st.textContent = '멈춤: ' + e.message;
+    }
+    btn.disabled = false; $stop.hidden = true;
+    refreshInfo();
+  };
+  document.getElementById('hqClear').onclick = async () => {
+    if (!confirm('저장된 고품질 음성 파일을 모두 지울까요? 다시 만들면 비용이 들어요.')) return;
+    await clearClips();
+    toast('음성 파일을 지웠어요');
+    refreshInfo();
+  };
+}
 
 // ---------- settings ----------
 export function renderSettings() {
@@ -23,6 +115,30 @@ export function renderSettings() {
     <details class="panel fold"><summary><span><b>${title}</b><small>${sub}</small></span></summary>${inner}</details>`;
 
   shell('설정', `
+    <section class="panel"><h3>화면</h3>
+      <div class="field"><span>글자 크기</span>
+        <div class="segmented three">${[['m', '보통'], ['l', '크게'], ['xl', '아주 크게']].map(([v, l]) => `<a href="javascript:void 0" role="button" data-size="${v}" class="${s.textSize === v ? 'on' : ''}">${l}</a>`).join('')}</div></div>
+      <div class="field"><span>테마</span>
+        <div class="segmented three">${[['auto', '자동(폰 설정)'], ['light', '☀️ 밝게'], ['dark', '🌙 어둡게']].map(([v, l]) => `<a href="javascript:void 0" role="button" data-theme-pick="${v}" class="${s.theme === v ? 'on' : ''}">${l}</a>`).join('')}</div></div>
+    </section>
+    <section class="panel hq"><h3>🎧 고품질 음성 · 화면 꺼져도 재생</h3>
+      <p class="muted small">OpenAI 음성으로 대사를 음성 파일로 만들어 이 폰에 저장합니다. 발음이 자연스럽고, <b>화면이 꺼지거나 내비를 띄워도 계속 재생</b>돼요. 한 번 만든 파일은 다시 돈이 들지 않아요. 키(platform.openai.com)는 이 폰에만 저장되고 OpenAI로만 전송됩니다.</p>
+      <label class="field"><span>OpenAI API 키</span>
+        <span class="row"><input type="password" id="oaikey" class="text-in" placeholder="sk-..." value="${esc(getOpenAIKey())}" autocomplete="off">
+        <button class="ghost" id="saveOai">저장</button></span></label>
+      <label class="switch block"><input type="checkbox" id="hqOn" ${s.hqVoice ? 'checked' : ''} ${getOpenAIKey() ? '' : 'disabled'}><span>고품질 음성 사용${getOpenAIKey() ? '<small>끄면 기기 음성으로 돌아가요</small>' : '<small class="why">API 키 필요</small>'}</span></label>
+      <div class="hq-voices">${[['theodore', 'Theodore'], ['samantha', 'Samantha'], ['female', '다른 여성'], ['male', '다른 남성'], ['narrator', '지문·안내'], ['korean', '한국어']].map(([slot, label]) => `
+        <label class="field"><span>${label}</span><span class="row">
+          <select data-hqv="${slot}">${OPENAI_VOICES.map((v) => `<option ${((s.hqVoices || {})[slot] || DEFAULT_HQ_VOICES[slot]) === v ? 'selected' : ''}>${v}</option>`).join('')}</select>
+          <button class="icon-btn" data-hqtest="${slot}" aria-label="미리 듣기" ${getOpenAIKey() ? '' : 'disabled'}>▶</button></span></label>`).join('')}</div>
+      <p class="muted small" id="hqInfo">저장된 음성 파일 확인 중…</p>
+      <div class="row wrap">
+        <button class="btn-primary" id="hqGen" ${getOpenAIKey() ? '' : 'disabled'}>⬇ 대본 전체 음성 미리 만들기${getOpenAIKey() ? '' : '<small class="why">API 키 필요</small>'}</button>
+        <button class="ghost" id="hqStop" hidden>멈추기</button>
+        <button class="ghost danger" id="hqClear">음성 파일 지우기</button>
+      </div>
+      <p class="status" id="hqStatus"></p>
+    </section>
     <section class="panel"><h3>자주 쓰는 설정</h3>
       ${range('rate', '말하기 속도', 0.6, 1.3, 0.05, (v) => v + '×')}
       ${range('repeat', '따라 말하기 반복 횟수', 1, 4, 1, (v) => v + '회')}
@@ -76,6 +192,15 @@ export function renderSettings() {
     </details>
     <button class="ghost block" id="guideAgain">📘 사용 안내 다시 보기</button>`, { back: '#/' });
   document.getElementById('guideAgain').onclick = () => openOnboarding();
+  bindHqSettings();
+  $app.querySelectorAll('[data-size]').forEach((b) => b.onclick = (ev) => {
+    ev.preventDefault();
+    s.textSize = b.dataset.size; saveSettings(); applyDisplay(); renderSettings();
+  });
+  $app.querySelectorAll('[data-theme-pick]').forEach((b) => b.onclick = (ev) => {
+    ev.preventDefault();
+    s.theme = b.dataset.themePick; saveSettings(); applyDisplay(); renderSettings();
+  });
 
   $app.querySelectorAll('[data-k]').forEach((r) => r.oninput = () => {
     s[r.dataset.k] = +r.value; saveSettings();
@@ -146,20 +271,8 @@ export function renderSettings() {
   const $bk = document.getElementById('bkStatus');
   document.getElementById('backup').onclick = async () => {
     $bk.textContent = '백업 만드는 중…';
-    const withScript = document.getElementById('bkScript').checked;
-    const data = {};
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (!k.startsWith('her.') || k === 'her.apikey' || k === 'her.dictcache' || (!withScript && k === 'her.script')) continue;
-      data[k] = localStorage.getItem(k);
-    }
-    let recordings = [];
-    try { recordings = await exportRecordings(); } catch { /* no recordings store */ }
-    const backup = { app: 'her-shadowing', version: 1, exportedAt: new Date().toISOString(), localStorage: data, recordings };
-    const url = URL.createObjectURL(new Blob([JSON.stringify(backup)], { type: 'application/json' }));
-    const a = Object.assign(document.createElement('a'), { href: url, download: `her-shadowing-backup-${new Date().toISOString().slice(0, 10)}.json` });
-    a.click(); setTimeout(() => URL.revokeObjectURL(url), 4000);
-    $bk.textContent = `백업 완료: 녹음 ${recordings.length}개 포함. 파일을 Google Drive 등에 보관하세요.`;
+    const n = await makeBackup(document.getElementById('bkScript').checked);
+    $bk.textContent = `백업 완료: 녹음 ${n}개 포함. 파일을 Google Drive 등에 보관하세요.`;
   };
   const $rs = document.getElementById('restore');
   $rs.onchange = async () => {
