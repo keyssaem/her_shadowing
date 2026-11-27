@@ -26,13 +26,35 @@ const emptyDay = () => ({ lines: 0, heard: 0, reviews: 0, recs: 0, ms: 0, scenes
 const dayOf = (k = dayKey()) => (S.days[k] ||= emptyDay());
 const isActive = (d) => d && (d.lines + d.heard + d.reviews + d.recs > 0 || d.ms >= 60000);
 
-export function streak() {
-  let k = dayKey();
-  if (!isActive(S.days[k])) k = dayKey(new Date(Date.now() - DAY));
+// Monday-based week id, used for the one-free-rest-day-per-week streak freeze.
+const weekOf = (d) => dayKey(new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7)));
+
+/**
+ * Streak with a freeze: one missed day per week (Mon–Sun) is bridged when
+ * there is study on both sides of it. Frozen days keep the streak alive but
+ * don't add to it. Pure (days map in, result out) so it is unit-tested.
+ */
+export function streakInfo(days, today = new Date()) {
+  const act = (d) => isActive(days[dayKey(d)]);
+  let d = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  if (!act(d)) d = new Date(d.getTime() - DAY); // today not done yet: count up to yesterday
   let n = 0;
-  for (let d = keyToDate(k); isActive(S.days[dayKey(d)]); d = new Date(d.getTime() - DAY)) n++;
-  return n;
+  const frozen = [];
+  const usedWeeks = new Set();
+  for (let guard = 0; guard < 3650; guard++) {
+    if (act(d)) { n++; d = new Date(d.getTime() - DAY); continue; }
+    const before = new Date(d.getTime() - DAY);
+    const wk = weekOf(d);
+    if (n > 0 && act(before) && !usedWeeks.has(wk)) {
+      usedWeeks.add(wk); frozen.push(dayKey(d)); d = before; continue;
+    }
+    break;
+  }
+  const thisWeek = weekOf(today);
+  return { n, frozen, freezeUsedThisWeek: frozen.some((k) => weekOf(keyToDate(k)) === thisWeek) };
 }
+export const streak = () => streakInfo(S.days).n;
+export const streakDetail = () => streakInfo(S.days);
 export const stats = () => S;
 export const todayStats = () => dayOf();
 export const activeDays = () => Object.values(S.days).filter(isActive).length;
@@ -107,6 +129,10 @@ const P = {
   improved: [
     ['{from}점 → {score}점! 방금 실력이 늘었어요.', 'From {from} to {score}. You just got better.'],
     ['+{delta}점 상승. 반복이 효과를 내고 있어요.', 'Up {delta} points. Repetition is working.'],
+  ],
+  mission: [
+    ['실전 미션 성공! "{en}", 이제 진짜 내 말이에요.', 'You used it for real. That is how phrases stick.'],
+    ['미션 성공 {count}번째! 영화 대사가 생활 영어가 되고 있어요.', 'Mission number {count}. Movie lines are becoming your everyday English.'],
   ],
   quiz3: [
     ['별 세 개! {total}문제 중 {n}문제 정답.', 'Three stars. {n} out of {total}.'],
@@ -256,6 +282,10 @@ export function track(type, data = {}) {
       d.ms += data.ms; t.ms += data.ms;
       const goal = (data.goalMin || 15) * 60000;
       if (!d.goal && d.ms >= goal) { d.goal = true; out.push(pick('goal', { n: data.goalMin || 15 })); }
+      break;
+    }
+    case 'mission': {
+      out.push(pick('mission', { en: data.en, count: data.count }));
       break;
     }
     case 'quiz': {

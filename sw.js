@@ -4,12 +4,12 @@
 //   (stale-while-revalidate).
 // - Libraries from CDNs (pdf.js, Claude SDK): cache-first; their URLs are versioned.
 // - Everything else (APIs) goes straight to the network.
-const CACHE = 'her-shadowing-v13';
+const CACHE = 'her-shadowing-v15';
 const SHELL = [
   './', 'index.html', 'css/style.css', 'manifest.webmanifest', 'icon.svg',
   'js/app.js', 'js/core.js', 'js/ui.js', 'js/view-home.js', 'js/view-scene.js', 'js/view-study.js',
   'js/view-settings.js', 'js/view-talk.js', 'js/view-favs.js', 'js/parser.js', 'js/content.js', 'js/player.js', 'js/tts.js',
-  'js/dict.js', 'js/motivate.js', 'js/recorder.js', 'js/translate.js', 'js/claude.js', 'js/speed.js', 'js/quiz.js', 'js/view-quiz.js', 'js/hq-tts.js', 'js/hq-prep.js',
+  'js/dict.js', 'js/motivate.js', 'js/recorder.js', 'js/translate.js', 'js/claude.js', 'js/speed.js', 'js/quiz.js', 'js/view-quiz.js', 'js/hq-tts.js', 'js/hq-prep.js', 'js/pitch.js', 'js/card.js',
 ];
 const CDN_HOSTS = new Set(['cdnjs.cloudflare.com', 'cdn.jsdelivr.net']);
 

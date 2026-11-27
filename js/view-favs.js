@@ -1,6 +1,14 @@
 // "내 명대사": favourite lines starred in the script, as a playable list.
 import { roleOf } from './tts.js';
-import { LS, state, $app, esc, sceneTitle, player, favLines, favCard, toggleFav, weakLineList } from './core.js';
+import { LS, state, $app, esc, sceneTitle, player, favLines, favCard, toggleFav, weakLineList, lineSrs, byLineDue } from './core.js';
+
+/** "복습: 오늘" / "복습: 3일 뒤" label for a saved line. */
+const dueLabel = (f) => {
+  const st = lineSrs.get(`${f.sceneId}:${f.itemIndex}`);
+  if (!st) return '<span class="due new">새로 추가</span>';
+  const days = Math.ceil((st.due - Date.now()) / 86400000);
+  return days <= 0 ? '<span class="due now">오늘 복습</span>' : `<span class="due">${days}일 뒤 복습</span>`;
+};
 import { shell, go, toast, reviewTabs } from './ui.js';
 
 export function renderFavs() {
@@ -10,7 +18,7 @@ export function renderFavs() {
     <p class="muted small">대본에서 대사를 누르고 ☆ 명대사를 고르면 여기에 모여요. 🚗 출발 코스 마지막에도 2~3줄씩 나옵니다.</p>
     ${list.length ? `
       <div class="grid2">
-        <button class="card primary" id="playAll"><span class="card-kicker">${list.length}줄</span><span class="card-title">▶ 전체 재생</span><span class="card-sub">${state.settings.mode === 'listen' ? '듣기' : '따라 말하기'} 모드</span></button>
+        <button class="card primary" id="playAll"><span class="card-kicker">${list.length}줄</span><span class="card-title">▶ 복습 순서로</span><span class="card-sub">${state.settings.mode === 'listen' ? '듣기' : '따라 말하기'} 모드</span></button>
         <button class="card" id="shuffleAll"><span class="card-kicker">무작위</span><span class="card-title">🔀 섞어서</span><span class="card-sub">순서 없이 반복</span></button>
       </div>
       <ul class="fav-list">${list.map((f, i) => `
@@ -18,7 +26,7 @@ export function renderFavs() {
           <div class="ex-main">
             <span class="sp">${esc(f.item.sp)}</span>
             <b>${esc(f.item.text)}</b>
-            <a class="src" href="#/scene/${f.sceneId}">${esc(sceneTitle(f.scene))} · p.${f.item.page}</a>
+            <a class="src" href="#/scene/${f.sceneId}">${esc(sceneTitle(f.scene))} · p.${f.item.page}</a> ${dueLabel(f)}
           </div>
           <div class="ex-actions">
             <button class="icon-btn" data-play="${i}" aria-label="여기부터 재생">▶</button>
@@ -34,7 +42,7 @@ export function renderFavs() {
           <div class="ex-main">
             <span class="sp">${esc(f.item.sp)} · <span class="score-badge ${f.score >= 70 ? 'mid' : 'lo'}">${f.score}</span></span>
             <b>${esc(f.item.text)}</b>
-            <a class="src" href="#/scene/${f.sceneId}">${esc(sceneTitle(f.scene))} · p.${f.item.page}</a>
+            <a class="src" href="#/scene/${f.sceneId}">${esc(sceneTitle(f.scene))} · p.${f.item.page}</a> ${dueLabel(f)}
           </div>
           <div class="ex-actions">
             <button class="icon-btn" data-wplay="${i}" aria-label="재생">▶</button>
@@ -49,14 +57,14 @@ export function renderFavs() {
     player.play();
     go('#/drill');
   };
-  document.getElementById('playAll')?.addEventListener('click', () => start(list.map(favCard), 0, '⭐ 내 명대사'));
+  document.getElementById('playAll')?.addEventListener('click', () => start(byLineDue(list).map(favCard), 0, '⭐ 내 명대사 · 복습 순서'));
   document.getElementById('shuffleAll')?.addEventListener('click', () => {
     const cards = list.map(favCard);
     for (let i = cards.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [cards[i], cards[j]] = [cards[j], cards[i]]; }
     start(cards, 0, '⭐ 내 명대사 · 섞어서');
   });
   $app.querySelectorAll('[data-play]').forEach((b) => b.onclick = () => start(list.map(favCard), +b.dataset.play, '⭐ 내 명대사'));
-  document.getElementById('playWeak')?.addEventListener('click', () => start(weak.map(favCard), 0, '🎯 다시 연습할 대사'));
+  document.getElementById('playWeak')?.addEventListener('click', () => start(byLineDue(weak).map(favCard), 0, '🎯 다시 연습할 대사'));
   $app.querySelectorAll('[data-wplay]').forEach((b) => b.onclick = () => start(weak.map(favCard), +b.dataset.wplay, '🎯 다시 연습할 대사'));
   $app.querySelectorAll('[data-wdel]').forEach((b) => b.onclick = () => {
     const f = weak[+b.dataset.wdel];

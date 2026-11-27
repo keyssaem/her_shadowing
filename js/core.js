@@ -5,7 +5,7 @@ import { DEFAULT_HQ_VOICES } from './hq-tts.js';
 import { myDict, makeSrs } from './dict.js';
 import { speedFor, SPEED_OFFSETS } from './speed.js';
 import { makeTwoChoice } from './quiz.js';
-import { track, lineLetter, stats } from './motivate.js';
+import { track, lineLetter, stats, dayKey } from './motivate.js';
 import { updateHomeStrip } from './view-home.js';
 import { toast, openLetter, updatePlayerUI } from './ui.js';
 
@@ -116,12 +116,15 @@ export const hardMarked = new Set();
 player.onReplay = (card) => {
   if (card?.kind === 'word') { hardMarked.add(card.id); reviewWord(card.id, 'hard'); }
   if (card?.kind === 'expr') { hardMarked.add('x:' + card.id); exprSrs.review(card.id, 'hard'); }
+  if (card?.lineKey) { hardMarked.add('l:' + card.lineKey); lineSrs.review(card.lineKey, 'hard'); }
 };
 player.onCardDone = (card) => {
   if (card.kind === 'word') {
     if (!hardMarked.delete(card.id)) reviewWord(card.id, 'good');
     return;
   }
+  // Favourite / weak lines follow their own review schedule (1 → 2 → 4 days …).
+  if (card.lineKey && !hardMarked.delete('l:' + card.lineKey)) lineSrs.review(card.lineKey, 'good');
   if (card.kind === 'expr') {
     if (!hardMarked.delete('x:' + card.id)) exprSrs.review(card.id, 'good');
     return;
@@ -177,6 +180,17 @@ export const sceneRate = (sceneId) => speedFor(scenePlays(sceneId), state.settin
 
 // Key expressions get their own spaced-repetition schedule.
 export const exprSrs = makeSrs('exprsrs');
+// Saved lines (favourites, weak lines) get a schedule too, keyed "sceneId:itemIndex".
+export const lineSrs = makeSrs('linesrs');
+/** Lines ordered for review: due first (oldest due), then never-reviewed, then the rest. */
+export function byLineDue(list) {
+  const rank = (f) => {
+    const st = lineSrs.get(`${f.sceneId}:${f.itemIndex}`);
+    return !st ? 1 : st.due <= Date.now() ? 0 : 2;
+  };
+  return shuffle(list).sort((a, b) => rank(a) - rank(b)
+    || (lineSrs.get(`${a.sceneId}:${a.itemIndex}`)?.due || 0) - (lineSrs.get(`${b.sceneId}:${b.itemIndex}`)?.due || 0));
+}
 /** n expressions to practise: due ones first, then new ones; never mastered. */
 export function pickExpressions(n, list = state.expressions) {
   const open = list.filter((e) => !state.mastered.has(e.id));
@@ -234,6 +248,9 @@ export function planDrive(minutes) {
   const firstScene = order[si];
 
   push(cue(`${minutes}분 코스 출발. ${words.length ? `단어 복습 ${words.length}개, ` : ''}핵심 표현 세 개, 그리고 ${sceneTitle(firstScene)} 장면을 이어서 할게요.`));
+  // Morning drives start with today's real-life mission; evening drives end with a check-in.
+  const mission = missionCards();
+  if (mission.brief) push(mission.brief);
   if (words.length) { push(cue('먼저 단어 복습.')); words.forEach(push); }
   push(cue('핵심 표현 세 개.'));
   exprs.forEach(push);
@@ -256,18 +273,19 @@ export function planDrive(minutes) {
   }
 
   // 4) Finish with two or three of your favourite lines.
-  const favs = shuffle(favLines()).slice(0, minutes >= 30 ? 3 : 2);
+  const favs = byLineDue(favLines()).slice(0, minutes >= 30 ? 3 : 2);
   if (favs.length) {
     push(cue('마지막으로 내 명대사.'));
     favs.forEach((f) => push(favCard(f)));
   }
   // 4b) Lines that scored low in auto-scored shadowing.
-  const weak = shuffle(weakLineList()).slice(0, 2);
+  const weak = byLineDue(weakLineList()).slice(0, 2);
   if (weak.length) {
     push(cue('약했던 대사 다시 한 번.'));
     weak.forEach((f) => push(favCard(f)));
   }
   // 5) Bonus audio quiz, answered with the steering-wheel buttons.
+  if (mission.check) push(mission.check);
   const quiz = audioQuizCards(3);
   if (quiz.length) {
     push(cue('보너스 퀴즈 세 문제. 1번이면 다음 곡, 2번이면 이전 곡 버튼을 누르세요.'));
@@ -277,6 +295,12 @@ export function planDrive(minutes) {
 }
 
 // ---------- quiz store: results feed the review schedule + wrong-answer notes ----------
+// The "who said it?" game was removed; drop its leftover wrong-answer notes once.
+{
+  const w = LS.get('quiz.wrong', {});
+  const left = Object.fromEntries(Object.entries(w).filter(([, v]) => v?.q?.type !== 'who'));
+  if (Object.keys(left).length !== Object.keys(w).length) LS.set('quiz.wrong', left);
+}
 export const quizStore = {
   wrong: () => LS.get('quiz.wrong', {}),
   /** Record one answer. Expression questions update that expression's review schedule. */
@@ -314,9 +338,54 @@ export function audioQuizCards(n) {
     .map((q) => ({ kind: 'two', q, text: q.prompt }));
 }
 
+// ---------- today's real-life mission ----------
+const MISSION_SITUATIONS = [
+  '오늘 회의나 업무 대화에서', '점심 먹으면서 동료에게', '가족이나 친구와 통화하면서',
+  '메신저로 친구에게 영어 한 줄로', '퇴근길 차 안에서 소리 내어', '오늘 있었던 일을 떠올리며 혼잣말로',
+];
+/** One phrase to use in real life today (picked once per day, prefers phrases you've started learning). */
+export function todayMission() {
+  const today = dayKey();
+  let m = LS.get('mission', null);
+  if (m && m.date === today && state.expressions.some((e) => e.id === m.exprId)) {
+    const e = state.expressions.find((x) => x.id === m.exprId);
+    return { ...m, en: e.en, ko: e.ko };
+  }
+  const learning = state.expressions.filter((e) => !exprSrs.isNew(e.id) && !state.mastered.has(e.id));
+  const pool = learning.length ? learning : state.expressions;
+  const e = pool[Math.floor(Math.random() * pool.length)];
+  if (!e) return null;
+  m = { date: today, exprId: e.id, situation: MISSION_SITUATIONS[Math.floor(Math.random() * MISSION_SITUATIONS.length)], status: null };
+  LS.set('mission', m);
+  return { ...m, en: e.en, ko: e.ko };
+}
+export function setMissionStatus(status) {
+  const m = todayMission();
+  if (!m) return;
+  LS.set('mission', { date: m.date, exprId: m.exprId, situation: m.situation, status });
+  const log = LS.get('mission.log', {});
+  log[m.date] = status; LS.set('mission.log', log);
+  if (status === 'done') {
+    exprSrs.review(m.exprId, 'easy'); // used for real: a big step in the schedule
+    deliver(track('mission', { en: m.en, count: Object.values(log).filter((x) => x === 'done').length }));
+  }
+}
+export const missionCards = () => {
+  const m = todayMission();
+  if (!m || m.status) return { brief: null, check: null };
+  const h = new Date().getHours();
+  return { brief: h < 15 ? { kind: 'missionBrief', m, text: m.en } : null, check: h >= 15 ? { kind: 'mission', m, text: m.en } : null };
+};
+
 // Spoken feedback after a steering-wheel answer (1 = next track, 2 = previous track).
 let audioTally = { correct: 0, total: 0 };
 player.onAnswer = (card, choice) => {
+  if (card.kind === 'mission') {
+    const ko = { voiceName: state.settings.voices.korean, lang: 'ko-KR', rate: 1.05 };
+    if (choice === 1) { setMissionStatus('done'); return [{ type: 'beep', freq: 1318, label: '🎯 미션 성공!' }, { type: 'speak', text: '멋져요! 실전에서 쓴 표현은 오래 남아요.', ...ko, label: '🎯 미션 성공!' }]; }
+    if (choice === 2) { setMissionStatus('missed'); return [{ type: 'speak', text: '괜찮아요. 내일 미션에서 다시 도전해요.', ...ko, label: '내일 다시 도전' }]; }
+    return [{ type: 'speak', text: '홈 화면에서 나중에 체크할 수 있어요.', ...ko, label: '홈에서 체크하기' }];
+  }
   const q = card.q;
   const ok = choice - 1 === q.answer;
   const ko = { voiceName: state.settings.voices.korean, lang: 'ko-KR', rate: 1.05 };
@@ -364,7 +433,7 @@ export function weakLineList() {
     .map((f) => ({ ...f, item: f.scene.items[f.itemIndex], added: f.at }))
     .sort((a, b) => a.score - b.score);
 }
-export const favCard = (f) => ({ kind: 'line', sp: f.item.sp, text: f.item.text, paren: f.item.paren, itemIndex: f.itemIndex, sceneId: f.sceneId, fav: true });
+export const favCard = (f) => ({ kind: 'line', sp: f.item.sp, text: f.item.text, paren: f.item.paren, itemIndex: f.itemIndex, sceneId: f.sceneId, fav: true, lineKey: `${f.sceneId}:${f.itemIndex}` });
 
 export function loadScene(scene, { index = 0, autoplay = false } = {}) {
   player.load({ cards: sceneCards(scene), index, title: sceneTitle(scene), kind: 'scene' });

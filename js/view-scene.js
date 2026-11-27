@@ -5,6 +5,8 @@ import { getKo, hasScene, translateScene, getKey } from './translate.js';
 import { track } from './motivate.js';
 import { canRecord, startRecording, saveRecording, listByKey, deleteRecording, playBlob, stopPlayback, canScore, listen, scoreAgainst } from './recorder.js';
 import { chunkLine } from './player.js';
+import { clip, getOpenAIKey, DEFAULT_HQ_VOICES } from './hq-tts.js';
+import { pitchTrack, contour, similarity, contourPath, decodeToMono } from './pitch.js';
 import { LS, state, saveSettings, $app, esc, sceneTitle, dialogueCount, player, deliver, scenePlays, sceneRate, loadScene, sceneCards, relTime, scoreKey, getScores, isFav, toggleFav } from './core.js';
 import { modeLabel } from './view-home.js';
 import { go, shell, closeSheet, toast, bigBar, bindBigBar, updatePlayerUI } from './ui.js';
@@ -476,6 +478,7 @@ export function openPracticeSheet(scene, itemIndex, opts = {}) {
   let busy = ''; // '' | 'rec' | 'listen' | 'compare'
   let result = null; // last score result for current chunk
   let history = [];
+  let pitchHtml = ''; // intonation comparison result (SVG) for the current chunk
   const root = document.createElement('div');
   root.id = 'sheet-root';
   document.body.appendChild(root);
@@ -553,7 +556,9 @@ export function openPracticeSheet(scene, itemIndex, opts = {}) {
           <div class="row wrap">
             <button class="ghost" data-x="ab" ${busy ? 'disabled' : ''}>원문 ↔ 최근 내 목소리</button>
             ${history.length >= 2 ? `<button class="ghost hl" data-x="then" ${busy ? 'disabled' : ''}>${relTime(first.created)}의 나 vs ${relTime(last.created)}의 나</button>` : ''}
+            <button class="ghost" data-x="pitch" ${busy || !getOpenAIKey() ? 'disabled' : ''}>📈 억양 비교${getOpenAIKey() ? '' : '<small class="why">고품질 음성(OpenAI 키) 필요</small>'}</button>
           </div>
+          ${pitchHtml}
           <ul class="rec-list">${history.slice().reverse().map((r) => `
             <li><button class="icon-btn" data-play="${r.id}" aria-label="재생">▶</button>
               <span>${relTime(r.created)} <small class="muted">${new Date(r.created).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · ${(r.dur / 1000).toFixed(1)}초</small></span>
@@ -571,6 +576,7 @@ export function openPracticeSheet(scene, itemIndex, opts = {}) {
     if (dur < 400) return draw('너무 짧아요. 다시 녹음해 보세요.');
     await saveRecording({ key: key(), text: text(), sp: item.sp, sceneId: scene.id, itemIndex, page: item.page, blob, mime, dur, created: Date.now() });
     deliver(track('rec'));
+    pitchHtml = ''; // a new take: compare again
     await loadHistory();
     draw('저장했어요. 원문 → 내 목소리로 들려줄게요.');
     busy = 'compare'; draw('원문 → 내 목소리');
@@ -591,7 +597,7 @@ export function openPracticeSheet(scene, itemIndex, opts = {}) {
   root.addEventListener('click', async (ev) => {
     const chunkBtn = ev.target.closest('[data-chunk]');
     if (chunkBtn && !busy) {
-      ci = +chunkBtn.dataset.chunk; result = null; dictResult = null; typed = '';
+      ci = +chunkBtn.dataset.chunk; result = null; dictResult = null; typed = ''; pitchHtml = '';
       await loadHistory(); draw();
       if (mode === 'dictation') { cancelSpeech(); sayOriginal(); }
       return;
@@ -690,6 +696,36 @@ export function openPracticeSheet(scene, itemIndex, opts = {}) {
       listener = null;
     }
     if (x === 'ab' && !busy && history.length) compareAB(null, history[history.length - 1], '원문 → 최근 내 목소리');
+    if (x === 'pitch' && !busy && history.length) {
+      // Native clip (OpenAI voice) vs your latest recording, as pitch contours.
+      busy = 'pitch'; draw('억양 분석 중…');
+      try {
+        const slot = roleOf(item.sp);
+        const voice = (state.settings.hqVoices || {})[slot] || DEFAULT_HQ_VOICES[slot];
+        const [nat, mine] = await Promise.all([clip(speakable(text()), voice), Promise.resolve(history[history.length - 1].blob)]);
+        const [a, b] = await Promise.all([decodeToMono(nat), decodeToMono(mine)]);
+        const ca = contour(pitchTrack(a.samples, a.sampleRate));
+        const cb = contour(pitchTrack(b.samples, b.sampleRate));
+        const sim = similarity(ca, cb);
+        pitchHtml = `
+          <div class="pitch-box">
+            <div class="pitch-head"><b>억양 일치도 ${sim == null ? '–' : sim + '%'}</b>
+              <span class="legend-inline"><i class="ln native"></i>원어민 <i class="ln mine"></i>내 목소리</span></div>
+            <svg viewBox="0 0 300 120" class="pitch-svg" role="img" aria-label="억양 곡선 비교">
+              <line x1="0" y1="60" x2="300" y2="60" class="mid"/>
+              <path d="${contourPath(ca)}" class="native"/>
+              <path d="${contourPath(cb)}" class="mine"/>
+            </svg>
+            <p class="muted tiny">${sim == null ? '목소리가 충분히 잡히지 않았어요. 조용한 곳에서 또렷하게 다시 녹음해 보세요.'
+              : sim >= 75 ? '오르내림이 원어민과 비슷해요! 👏' : sim >= 50 ? '전체 흐름은 비슷해요. 올라가고 내려가는 지점을 더 크게 따라 해보세요.'
+              : '원어민은 높낮이가 더 커요. 강조하는 단어를 과장해서 따라 해보세요.'} 위로 갈수록 높은 음이에요.</p>
+          </div>`;
+        busy = ''; draw();
+      } catch (e) {
+        busy = ''; pitchHtml = '';
+        draw(e.message === 'no-key' ? '설정에서 OpenAI 키를 먼저 넣어주세요.' : '억양 분석 실패: ' + e.message);
+      }
+    }
     if (x === 'then' && !busy && history.length >= 2) compareAB(history[0], history[history.length - 1], '처음의 나 → 최근의 나');
   });
 

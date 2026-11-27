@@ -18,7 +18,27 @@ const { chunkLine } = await import('../js/player.js');
 const { makeSrs, keyOf, guessPos } = await import('../js/dict.js');
 const { speedFor, isFullSpeed } = await import('../js/speed.js');
 const { parseScript } = await import('../js/parser.js');
-const { weekReport } = await import('../js/motivate.js');
+const { weekReport, streakInfo } = await import('../js/motivate.js');
+
+test('streak freeze: one rest day per week keeps the streak; two in a row break it', () => {
+  const on = { lines: 5, heard: 0, reviews: 0, recs: 0, ms: 120000 };
+  const mk = (keys) => Object.fromEntries(keys.map((k) => [k, on]));
+  const today = new Date(2026, 10, 27); // Fri 27 Nov 2026
+  // Studied Mon–Thu except Wed (25th) → freeze bridges Wed.
+  let r = streakInfo(mk(['2026-11-23', '2026-11-24', '2026-11-26', '2026-11-27']), today);
+  assert.equal(r.n, 4);
+  assert.deepEqual(r.frozen, ['2026-11-25']);
+  assert.ok(r.freezeUsedThisWeek);
+  // Two missed days in a row → only the days after the gap count.
+  r = streakInfo(mk(['2026-11-23', '2026-11-26', '2026-11-27']), today);
+  assert.equal(r.n, 2);
+  // Second gap in the same week is not bridged.
+  r = streakInfo(mk(['2026-11-23', '2026-11-25', '2026-11-27']), today);
+  assert.equal(r.n, 2);
+  // Today not studied yet: the streak up to yesterday still counts.
+  r = streakInfo(mk(['2026-11-25', '2026-11-26']), today);
+  assert.equal(r.n, 2);
+});
 const Q = await import('../js/quiz.js');
 
 // Deterministic random for repeatable quiz tests.
@@ -55,13 +75,42 @@ test('quiz: distractor pool skips names and fillers', () => {
   assert.ok(!pool.includes('charles') && !pool.includes('mmmm') && !pool.includes('hmmmm'));
 });
 
-test('quiz: who-said-it keeps the right speaker among four options', () => {
-  const cands = Q.whoCandidates(sampleScenes);
+test('quiz: line pool keeps main-character dialogue of a usable length', () => {
+  const cands = Q.lineCandidates(sampleScenes);
   assert.equal(cands.length, 3);
-  const q = Q.makeWho(cands[2], seeded());
-  assert.equal(q.options.length, 4);
-  assert.equal(q.options[q.answer], 'AMY');
-  assert.ok(q.options.includes('THEODORE') && q.options.includes('SAMANTHA'));
+  assert.deepEqual(cands.map((c) => c.sp), ['THEODORE', 'SAMANTHA', 'AMY']);
+  assert.equal(Q.makeWho, undefined); // the who-said-it game was removed
+});
+
+const P = await import('../js/pitch.js');
+// Synthetic "voice": a sine wave whose pitch glides from f0 to f1, with silence around it.
+const glide = (f0, f1, secs = 0.8, sr = 16000) => {
+  const n = Math.floor(secs * sr), pad = Math.floor(0.15 * sr);
+  const out = new Float32Array(n + pad * 2);
+  let phase = 0;
+  for (let i = 0; i < n; i++) { const f = f0 + (f1 - f0) * (i / n); phase += (2 * Math.PI * f) / sr; out[pad + i] = 0.5 * Math.sin(phase); }
+  return out;
+};
+
+test('pitch: tracks a rising tone and ignores silence', () => {
+  const tr = P.pitchTrack(glide(150, 250), 16000);
+  const voiced = tr.filter((p) => p.hz);
+  assert.ok(voiced.length > 20);
+  assert.ok(Math.abs(voiced[2].hz - 150) < 20, `start ${voiced[2].hz}`);
+  assert.ok(Math.abs(voiced.at(-3).hz - 250) < 25, `end ${voiced.at(-3).hz}`);
+  assert.equal(tr[0].hz, null); // leading silence
+});
+
+test('pitch: same melody in a deeper voice matches; opposite melody does not', () => {
+  const sr = 16000;
+  const native = P.contour(P.pitchTrack(glide(200, 300), sr));
+  const sameShapeLower = P.contour(P.pitchTrack(glide(110, 165), sr)); // same rise, an octave-ish lower
+  const falling = P.contour(P.pitchTrack(glide(300, 200), sr));
+  const same = P.similarity(native, sameShapeLower);
+  const diff = P.similarity(native, falling);
+  assert.ok(same >= 85, `same ${same}`);
+  assert.ok(diff <= 20, `diff ${diff}`);
+  assert.ok(P.contourPath(native).startsWith('M'));
 });
 
 test('quiz: sound-alike variants change exactly one misheard word', () => {

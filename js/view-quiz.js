@@ -3,7 +3,7 @@
 import { speak, cancelSpeech, roleOf, speakable } from './tts.js';
 import { track } from './motivate.js';
 import {
-  wordPool, whoCandidates, nextPairs, makeCloze, makeMatch, makeWho, makeTwoChoice, makeListen, makeOrder, makeNext,
+  wordPool, lineCandidates, nextPairs, makeCloze, makeMatch, makeTwoChoice, makeListen, makeOrder, makeNext,
   orderCorrect, starsFor,
 } from './quiz.js';
 import { state, $app, esc, sceneById, sceneTitle, shuffle, player, deliver, pickExpressions, quizStore, audioQuizCards } from './core.js';
@@ -13,7 +13,6 @@ const GAMES = {
   daily: { icon: '⭐', title: '오늘의 퀴즈', sub: '10문제 · 골고루 섞어서' },
   cloze: { icon: '✏️', title: '빈칸 채우기', sub: '대사 속 빠진 단어 고르기' },
   match: { icon: '🔗', title: '짝 맞추기', sub: '한국어 ↔ 영어 5쌍' },
-  who: { icon: '🎭', title: '누가 말했을까?', sub: '대사 보고 인물 맞히기' },
   listen: { icon: '👂', title: '듣고 고르기', sub: 'gonna·going to 같은 소리 구별' },
   order: { icon: '🧩', title: '순서 맞추기', sub: '섞인 단어로 문장 만들기' },
   next: { icon: '💬', title: '다음 대사는?', sub: '대화 흐름 맞히기' },
@@ -26,7 +25,7 @@ const spName = (s) => SPEAKER_KO[s] || (s ? s[0] + s.slice(1).toLowerCase() : ''
 let pool = null, lines = null, pairs = null;
 const ensurePools = () => {
   pool ||= wordPool(state.script.scenes);
-  lines ||= whoCandidates(state.script.scenes);
+  lines ||= lineCandidates(state.script.scenes);
   pairs ||= nextPairs(state.script.scenes);
 };
 
@@ -45,7 +44,6 @@ const fromLines = (n, make) => {
   for (const c of shuffle(lines)) { if (out.length >= n) break; const q = make(c); if (q) out.push(q); }
   return out;
 };
-const whoSet = (n) => fromLines(n, (c) => makeWho(c));
 const listenSet = (n) => fromLines(n, (c) => makeListen(c));
 const orderSet = (n) => fromLines(n, (c) => makeOrder(c));
 const nextSet = (n) => {
@@ -54,11 +52,11 @@ const nextSet = (n) => {
   return out;
 };
 const matchSet = () => [makeMatch(pickExpressions(5))].filter(Boolean);
-const wrongSet = () => shuffle(Object.values(quizStore.wrong()).map((w) => w.q)).slice(0, 10);
+const wrongSet = () => shuffle(Object.values(quizStore.wrong()).map((w) => w.q).filter((q) => q.type !== 'who')).slice(0, 10);
 
 /** One random question of any single-answer type (used by survival). */
 function anyQuestion() {
-  const makers = [() => clozeSet(1), () => whoSet(1), () => listenSet(1), () => orderSet(1), () => nextSet(1)];
+  const makers = [() => clozeSet(1), () => listenSet(1), () => orderSet(1), () => nextSet(1)];
   for (let k = 0; k < 6; k++) { const q = makers[Math.floor(Math.random() * makers.length)]()[0]; if (q) return q; }
   return clozeSet(1)[0];
 }
@@ -66,14 +64,13 @@ function anyQuestion() {
 function buildRound(mode) {
   ensurePools();
   if (mode === 'cloze') return clozeSet(10);
-  if (mode === 'who') return whoSet(10);
   if (mode === 'listen') return listenSet(10);
   if (mode === 'order') return orderSet(10);
   if (mode === 'next') return nextSet(10);
   if (mode === 'match') return [...matchSet(), ...matchSet(), ...matchSet()];
   if (mode === 'wrong') return wrongSet();
   if (mode === 'survival') return [anyQuestion()];
-  const mix = shuffle([...clozeSet(3), ...whoSet(2), ...listenSet(2), ...orderSet(1), ...nextSet(1)]);
+  const mix = shuffle([...clozeSet(3), ...listenSet(3), ...orderSet(1), ...nextSet(2)]);
   mix.splice(7, 0, ...matchSet());
   return mix.slice(0, 10);
 }
@@ -108,7 +105,7 @@ function renderQuizHome() {
   shell('퀴즈', `
     <button class="quiz-hero" data-mode="daily">
       <span class="qh-icon">⭐</span>
-      <span class="qh-body"><b>오늘의 퀴즈 10문제</b><small>여섯 가지 게임을 골고루 섞어서${best.daily ? ` · 최고 ${stars('daily')}` : ''}</small></span>
+      <span class="qh-body"><b>오늘의 퀴즈 10문제</b><small>다섯 가지 게임을 골고루 섞어서${best.daily ? ` · 최고 ${stars('daily')}` : ''}</small></span>
       <span class="qh-go">시작 ›</span>
     </button>
     <button class="quiz-hero alt survival" data-mode="survival">
@@ -118,7 +115,7 @@ function renderQuizHome() {
     </button>
     <p class="sec-title">게임 골라 하기</p>
     <div class="game-grid">
-      ${['cloze', 'listen', 'match', 'order', 'who', 'next'].map(card).join('')}
+      ${['cloze', 'listen', 'match', 'order', 'next'].map(card).join('')}
       <button class="game" data-mode="wrong" ${wrongN ? '' : 'disabled'}>
         <span class="g-icon">📕</span><b>오답 다시 풀기</b><small>${wrongN ? `틀린 문제 ${wrongN}개` : '<span class="why">아직 오답 없음</span>'}</small>
       </button>
@@ -158,7 +155,7 @@ const progressBar = () => `
   </div>`;
 
 const HEADS = {
-  cloze: '빈칸에 들어갈 단어는?', who: '누가 말했을까?', two: '이 뜻의 영어 표현은?',
+  cloze: '빈칸에 들어갈 단어는?', two: '이 뜻의 영어 표현은?',
   listen: '들리는 문장을 고르세요', order: '단어를 순서대로 눌러 문장을 만드세요', next: '다음 대사로 알맞은 것은?',
 };
 const playLine = (text, sp) => { cancelSpeech(); speak(speakable(text), { voiceName: state.settings.voices[roleOf(sp)], rate: state.settings.rate }); };
@@ -190,10 +187,10 @@ function renderQuestion() {
     ${progressBar()}
     <p class="q-head">${HEADS[q.type] || '정답은?'}</p>
     <div class="q-card">${body}</div>
-    <div class="q-options ${q.type === 'who' ? 'who' : ''} ${q.type === 'listen' || q.type === 'next' ? 'long' : ''}">
+    <div class="q-options ${q.type === 'listen' || q.type === 'next' ? 'long' : ''}">
       ${q.options.map((o, k) => {
         const cls = !answered ? '' : k === q.answer ? 'right' : k === S.picked ? 'wrong' : 'dim';
-        return `<button class="q-opt ${cls}" data-k="${k}" ${answered ? 'disabled' : ''}>${q.type === 'who' ? `<span class="role-dot role-${roleOf(o)}"></span>${esc(spName(o))}` : esc(o)}</button>`;
+        return `<button class="q-opt ${cls}" data-k="${k}" ${answered ? 'disabled' : ''}>${esc(o)}</button>`;
       }).join('')}
     </div>
     ${answered ? feedback(ok, q, sc) : ''}`, { back: '#/quiz' });
@@ -207,7 +204,7 @@ function renderQuestion() {
 }
 
 function feedback(ok, q, sc) {
-  const answerText = q.type === 'who' ? spName(q.options[q.answer]) : q.type === 'order' ? q.line : q.options?.[q.answer];
+  const answerText = q.type === 'order' ? q.line : q.options?.[q.answer];
   const last = survival() ? S.hearts <= 0 : S.i + 1 >= S.items.length;
   return `
     <div class="q-feedback ${ok ? 'ok' : 'bad'}">
@@ -223,8 +220,8 @@ function feedback(ok, q, sc) {
 }
 function bindFeedback(q) {
   document.getElementById('listen')?.addEventListener('click', () => {
-    const sp = q.type === 'who' ? q.options[q.answer] : q.type === 'next' ? q.nextSp : q.sp;
-    const text = q.type === 'cloze' || q.type === 'order' ? q.line : q.type === 'who' ? q.prompt
+    const sp = q.type === 'next' ? q.nextSp : q.sp;
+    const text = q.type === 'cloze' || q.type === 'order' ? q.line
       : q.type === 'listen' ? q.audio : q.type === 'next' ? q.options[q.answer] : q.line || q.options[q.answer];
     playLine(text, sp);
   });

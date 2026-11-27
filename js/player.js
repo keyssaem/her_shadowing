@@ -285,6 +285,34 @@ export class Player {
     const gapMs = (text) => Math.round(estimateSeconds(text, rate) * s.gapFactor * 1000) + 400;
     const steps = [];
 
+    if (card.kind === 'missionBrief') {
+      // Morning: today's real-life mission (situation in Korean, the phrase in English).
+      const m = card.m;
+      const ko = { voiceName: s.voices.korean, lang: 'ko-KR', rate: 1.05 };
+      steps.push({ type: 'beep', freq: 1046, label: '🎯 오늘의 실전 미션' });
+      steps.push({ type: 'speak', text: `오늘의 실전 미션. ${m.situation} 이 표현을 한 번 써보세요.`, ...ko, label: `🎯 ${m.situation}` });
+      for (let r = 0; r < 2; r++) {
+        steps.push({ type: 'speak', text: speakable(m.en), voiceName: s.voices.samantha, rate, slot: 'samantha', label: `🎯 ${m.en}` });
+        steps.push({ type: 'wait', ms: 900 });
+      }
+      steps.push({ type: 'speak', text: m.ko, ...ko, label: `🎯 ${m.ko}` });
+      steps.push({ type: 'wait', ms: 400 });
+      return steps;
+    }
+
+    if (card.kind === 'mission') {
+      // Evening check-in, answered with the buttons: 1 = used it, 2 = not yet.
+      const m = card.m;
+      const ko = { voiceName: s.voices.korean, lang: 'ko-KR', rate: 1.05 };
+      steps.push({ type: 'beep', freq: 1046, label: '🎯 미션 체크' });
+      steps.push({ type: 'speak', text: '오늘의 미션, 써봤나요?', ...ko, label: '🎯 오늘의 미션, 써봤나요?' });
+      steps.push({ type: 'speak', text: speakable(m.en), voiceName: s.voices.samantha, rate, slot: 'samantha', label: `🎯 ${m.en}` });
+      steps.push({ type: 'speak', text: '써봤으면 다음 곡, 못 썼으면 이전 곡 버튼을 누르세요.', ...ko, label: '1 = 써봤어요 · 2 = 못 썼어요' });
+      steps.push({ type: 'beep', freq: 1175 });
+      steps.push({ type: 'answer', ms: 8000, label: '🎯 다음 곡 = 써봤어요 · 이전 곡 = 못 썼어요' });
+      return steps;
+    }
+
     if (card.kind === 'two') {
       // Audio two-choice quiz: Korean meaning, then "1번 ..., 2번 ...", then answer by button.
       const q = card.q;

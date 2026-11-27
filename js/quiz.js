@@ -81,8 +81,8 @@ export function makeMatch(exprs, rand = Math.random) {
   };
 }
 
-/** Lines that make good "who said it?" questions. */
-export function whoCandidates(scenes) {
+/** Dialogue lines of the main characters, used by the line-based quizzes. */
+export function lineCandidates(scenes) {
   const out = [];
   for (const sc of scenes) sc.items.forEach((it, i) => {
     if (it.t !== 'd' || !MAIN_SPEAKERS.includes(it.sp)) return;
@@ -90,20 +90,6 @@ export function whoCandidates(scenes) {
     if (n >= 5 && n <= 28) out.push({ sceneId: sc.id, itemIndex: i, sp: it.sp, text: it.text, page: it.page });
   });
   return out;
-}
-
-/** 3) Who said this line? */
-export function makeWho(cand, rand = Math.random) {
-  const others = shuffleWith(rand)(MAIN_SPEAKERS.filter((s) => s !== cand.sp));
-  // Theodore and Samantha are always plausible, so keep them among the options.
-  const must = ['THEODORE', 'SAMANTHA'].filter((s) => s !== cand.sp);
-  const rest = others.filter((s) => !must.includes(s));
-  const options = shuffleWith(rand)([cand.sp, ...must, ...rest].slice(0, 4));
-  return {
-    type: 'who', key: `who:${cand.sceneId}:${cand.itemIndex}`, ref: null,
-    prompt: cand.text, sceneId: cand.sceneId, itemIndex: cand.itemIndex, page: cand.page,
-    options, answer: options.indexOf(cand.sp),
-  };
 }
 
 /** 4) Audio two-choice: Korean meaning → which English is right? */

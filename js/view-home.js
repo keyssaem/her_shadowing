@@ -2,9 +2,10 @@ import { extractLines, parseScript } from './parser.js';
 import { ACTS } from './content.js';
 import { cancelSpeech } from './tts.js';
 import { myDict, boxLabel } from './dict.js';
-import { track, streak, stats, todayStats, activeDays, calendar } from './motivate.js';
+import { track, streak, streakDetail, stats, todayStats, activeDays, calendar, weekReport } from './motivate.js';
+import { drawWeeklyCard, saveCard } from './card.js';
 import { listAll, playBlob, stopPlayback, listen } from './recorder.js';
-import { LS, state, saveSettings, ensurePersistent, hydrate, $app, esc, sceneById, sceneTitle, dialogueCount, shuffle, player, pickExpressions, planDrive, loadScene, loadDrill, relTime, getScores, favLines, exprSrs } from './core.js';
+import { LS, state, saveSettings, ensurePersistent, hydrate, $app, esc, sceneById, sceneTitle, dialogueCount, shuffle, player, pickExpressions, planDrive, loadScene, loadDrill, relTime, getScores, favLines, exprSrs, todayMission, setMissionStatus } from './core.js';
 import { go, shell, toast, openLetter } from './ui.js';
 import { startWordDrill } from './view-study.js';
 import { makeBackup, backupDue } from './view-settings.js';
@@ -123,9 +124,11 @@ export function renderHome() {
         <button class="drive-btn" data-drive="30"><b>30</b>분 출발</button>
       </div>
     </section>
-    <section class="today-card" id="homeStrip"></section>`);
+    <section class="today-card" id="homeStrip"></section>
+    <section class="mission-card" id="missionCard"></section>`);
   homeTarget = { scene: target, index: startIndex };
   updateHomeStrip();
+  renderMissionCard();
   $app.querySelectorAll('[data-drive]').forEach((b) => b.onclick = () => startDrive(+b.dataset.drive));
   if (!LS.get('onboarded', false)) openOnboarding();
 }
@@ -183,6 +186,28 @@ export function updateHomeStrip() {
     }
     if (id === 'goal') return go('#/stats');
   });
+}
+
+// ---------- today's real-life mission ----------
+function renderMissionCard() {
+  const el = document.getElementById('missionCard');
+  const m = todayMission();
+  if (!el || !m) return;
+  const log = LS.get('mission.log', {});
+  const wins = Object.values(log).filter((x) => x === 'done').length;
+  el.innerHTML = `
+    <div class="mc-head"><b>🎯 오늘의 실전 미션</b>${wins ? `<span class="muted small">성공 ${wins}번</span>` : ''}</div>
+    <p class="mc-sit">${esc(m.situation)} 이 표현을 한 번 써보세요</p>
+    <p class="mc-en">${esc(m.en)}</p>
+    <p class="mc-ko">${esc(m.ko)}</p>
+    ${m.status === 'done' ? '<p class="mc-done">✅ 오늘 미션 성공! 내일 새 미션이 나와요.</p>'
+      : m.status === 'missed' ? '<p class="mc-missed">내일 다시 도전해요 · <button class="link-btn" data-mission="done">사실 써봤어요</button></p>'
+      : `<div class="mc-actions">
+          <button class="btn-secondary" data-mission="missed">아직 못 썼어요</button>
+          <button class="btn-primary" data-mission="done">✓ 써봤어요</button>
+        </div>
+        <p class="muted tiny">아침 출발 코스에서 미션을 알려주고, 오후 3시 이후 코스 끝에 "써봤나요?"를 물어봐요 (다음 곡 = 써봤어요).</p>`}`;
+  el.querySelectorAll('[data-mission]').forEach((b) => b.onclick = () => { setMissionStatus(b.dataset.mission); renderMissionCard(); updateHomeStrip(); });
 }
 
 // ---------- first-run guide (3 cards) ----------
@@ -276,10 +301,11 @@ export async function renderStats() {
       <button class="btn-primary" id="backupNow">지금 백업</button>
     </div>` : ''}
     <section class="stat-hero">
-      <div><b>🔥 ${streak()}</b><small>연속 학습일</small></div>
+      <div><b>🔥 ${streak()}</b><small>연속 학습일</small><small class="freeze">${streakDetail().freezeUsedThisWeek ? '🧊 이번 주 보호권 사용함' : '🧊 이번 주 보호권 1개'}</small></div>
       <div><b>${activeDays()}</b><small>총 학습일</small></div>
       <div><b>${Math.round(t.ms / 60000)}</b><small>총 학습(분)</small></div>
     </section>
+    <button class="ghost block" id="weekCard">🖼 이번 주 기록 카드 이미지로 저장</button>
     <section class="panel"><h3>최근 12주</h3>
       <div class="grass-wrap">
         <div class="grass-dow"><span>월</span><span></span><span>수</span><span></span><span>금</span><span></span><span>일</span></div>
@@ -355,6 +381,19 @@ export async function renderStats() {
       <label class="switch block"><input type="checkbox" id="vm" ${state.settings.voiceMotivation ? 'checked' : ''}><span>재생 중 응원 메시지 음성으로 듣기<small>카드 사이에 짧게 한국어+영어로</small></span></label>
     </section>`, { back: '#/' });
 
+  document.getElementById('weekCard').onclick = async () => {
+    const now = new Date();
+    const w = weekReport(stats().days, now);
+    const mon = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6);
+    const canvas = drawWeeklyCard({
+      range: `${mon.getMonth() + 1}/${mon.getDate()} – ${now.getMonth() + 1}/${now.getDate()}`,
+      minutes: w.minutes, lines: w.lines, reviews: w.reviews, graduated: w.graduated, activeDays: w.activeDays,
+      streak: streak(), acts: mastery.map((a) => ({ ko: a.ko, pct: a.pct })),
+      mission: Object.values(LS.get('mission.log', {})).filter((x) => x === 'done').length,
+    });
+    await saveCard(canvas, `her-shadowing-${now.toISOString().slice(0, 10)}.png`);
+    toast('이번 주 카드를 사진으로 저장했어요', '🖼');
+  };
   document.getElementById('backupNow')?.addEventListener('click', async (ev) => {
     ev.currentTarget.disabled = true;
     const n = await makeBackup(true);
